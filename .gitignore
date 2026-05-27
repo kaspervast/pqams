@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+backend/uploads/*
+!backend/uploads/.gitkeep
+frontend/vite.config.js
+frontend/vite.config.d.ts
+*.log

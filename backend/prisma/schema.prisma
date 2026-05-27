@@ -1,0 +1,547 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  CORRESPONDENCE_BRANCH
+  UNIT_USER
+  VIEWER
+
+  @@map("user_role")
+}
+
+enum UnitType {
+  POLICE_STATION
+  BRANCH
+  HEADQUARTER
+  OTHER
+
+  @@map("unit_type")
+}
+
+enum QuarterStatus {
+  AVAILABLE
+  OCCUPIED
+  UNDER_REPAIR
+  RESERVED
+  VACATED_PENDING_INSPECTION
+  DISPUTED
+  INACTIVE
+
+  @@map("quarter_status")
+}
+
+enum ApplicationType {
+  NEW_ALLOTMENT
+  TRANSFER_CHANGE
+
+  @@map("application_type")
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  DUPLICATE_REVIEW
+  ADMIN_REVIEW
+  CORRESPONDENCE_REVIEW
+  SUPER_ADMIN_REVIEW
+  RETURNED_FOR_RECONSIDERATION
+  APPROVED_WAITLIST
+  APPROVED_PENDING_ALLOTMENT
+  ALLOTTED
+  REJECTED
+  CANCELLED
+  CLOSED
+
+  @@map("application_status")
+}
+
+enum UrgencyCategory {
+  MEDICAL
+  DISABILITY
+  WIDOW_COMPASSIONATE
+  DISTANCE_FROM_POSTING
+  FAMILY_SAFETY
+  LAW_AND_ORDER_SENSITIVITY
+  GOVERNMENT_DUTY_URGENCY
+  EXISTING_QUARTER_UNSAFE
+  OTHER
+
+  @@map("urgency_category")
+}
+
+enum AttachmentType {
+  APPLICATION_LETTER
+  SPECIAL_CASE_DOCUMENT
+  ID_PROOF
+  CURRENT_QUARTER_DOCUMENT
+  OTHER
+
+  @@map("attachment_type")
+}
+
+enum ApprovalAction {
+  SUBMITTED
+  VERIFIED
+  RETURNED
+  REJECTED
+  APPROVED_WAITLIST
+  APPROVED_PENDING_ALLOTMENT
+  ALLOTTED
+  CANCELLED
+  CLOSED
+
+  @@map("approval_action")
+}
+
+enum DuplicateMatchStrength {
+  LOW
+  MEDIUM
+  HIGH
+  EXACT
+
+  @@map("duplicate_match_strength")
+}
+
+enum ChangeRequestType {
+  CREATE_QUARTER
+  UPDATE_QUARTER
+  STATUS_CHANGE
+  BULK_IMPORT
+
+  @@map("change_request_type")
+}
+
+enum ChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("change_request_status")
+}
+
+model PoliceUnit {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String        @unique @db.VarChar(200)
+  unitType      UnitType      @map("unit_type")
+  address       String?
+  contactNumber String?       @map("contact_number") @db.VarChar(20)
+  isActive      Boolean       @default(true) @map("is_active")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  users         User[]
+  personnel     Personnel[]
+  applications  Application[]
+
+  @@map("police_units")
+}
+
+model User {
+  id                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName               String                 @map("full_name") @db.VarChar(150)
+  username               String                 @unique @db.VarChar(80)
+  passwordHash           String                 @map("password_hash")
+  role                   UserRole
+  policeUnitId           String?                @map("police_unit_id") @db.Uuid
+  mobileNumber           String?                @map("mobile_number") @db.VarChar(20)
+  email                  String?                @db.VarChar(150)
+  isActive               Boolean                @default(true) @map("is_active")
+  mustChangePassword     Boolean                @default(true) @map("must_change_password")
+  lastLoginAt            DateTime?              @map("last_login_at")
+  createdAt              DateTime               @default(now()) @map("created_at")
+  updatedAt              DateTime               @updatedAt @map("updated_at")
+  policeUnit             PoliceUnit?            @relation(fields: [policeUnitId], references: [id])
+  createdQuarters        Quarter[]              @relation("QuarterCreatedBy")
+  updatedQuarters        Quarter[]              @relation("QuarterUpdatedBy")
+  approvedQuarters       Quarter[]              @relation("QuarterAdminApprovedBy")
+  createdPersonnel       Personnel[]            @relation("PersonnelCreatedBy")
+  updatedPersonnel       Personnel[]            @relation("PersonnelUpdatedBy")
+  submittedApplications  Application[]          @relation("ApplicationSubmittedBy")
+  uploadedAttachments    Attachment[]           @relation("AttachmentUploadedBy")
+  verifiedAttachments    Attachment[]           @relation("AttachmentVerifiedBy")
+  reviewedDuplicates     DuplicateCheck[]       @relation("DuplicateReviewedBy")
+  approvalActions        ApprovalHistory[]      @relation("ApprovalActedBy")
+  approvedAllotments     Allotment[]            @relation("AllotmentApprovedBy")
+  createdOccupancies     OccupancyRecord[]      @relation("OccupancyCreatedBy")
+  closedOccupancies      OccupancyRecord[]      @relation("OccupancyClosedBy")
+  quarterStatusChanges   QuarterStatusHistory[] @relation("QuarterStatusChangedBy")
+  auditLogs              AuditLog[]
+  refreshSessions        RefreshSession[]
+  notifications          Notification[]
+  changeRequestsCreated  QuarterChangeRequest[] @relation("ChangeRequestCreatedBy")
+  changeRequestsReviewed QuarterChangeRequest[] @relation("ChangeRequestReviewedBy")
+
+  @@map("users")
+}
+
+model Designation {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code             String            @unique @db.VarChar(20)
+  name             String            @db.VarChar(100)
+  rankOrder        Int               @map("rank_order")
+  isActive         Boolean           @default(true) @map("is_active")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  personnel        Personnel[]
+  eligibilityRules EligibilityRule[]
+
+  @@map("designations")
+}
+
+model QuarterType {
+  id               String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String                  @unique @db.VarChar(50)
+  description      String?
+  isActive         Boolean                 @default(true) @map("is_active")
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+  eligibilityRules EligibilityRule[]
+  quarters         Quarter[]
+  preferences      ApplicationPreference[]
+
+  @@map("quarter_types")
+}
+
+model Area {
+  id          String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String                  @unique @db.VarChar(150)
+  description String?
+  address     String?
+  isActive    Boolean                 @default(true) @map("is_active")
+  createdAt   DateTime                @default(now()) @map("created_at")
+  updatedAt   DateTime                @updatedAt @map("updated_at")
+  quarters    Quarter[]
+  preferences ApplicationPreference[]
+
+  @@map("areas")
+}
+
+model EligibilityRule {
+  id                      String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  designationId           String      @map("designation_id") @db.Uuid
+  quarterTypeId           String      @map("quarter_type_id") @db.Uuid
+  isEligible              Boolean     @default(false) @map("is_eligible")
+  requiresSpecialApproval Boolean     @default(false) @map("requires_special_approval")
+  remarks                 String?
+  createdAt               DateTime    @default(now()) @map("created_at")
+  updatedAt               DateTime    @updatedAt @map("updated_at")
+  designation             Designation @relation(fields: [designationId], references: [id])
+  quarterType             QuarterType @relation(fields: [quarterTypeId], references: [id])
+
+  @@unique([designationId, quarterTypeId])
+  @@map("eligibility_rules")
+}
+
+model Quarter {
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  areaId              String                 @map("area_id") @db.Uuid
+  quarterTypeId       String                 @map("quarter_type_id") @db.Uuid
+  wing                String?                @db.VarChar(50)
+  block               String?                @db.VarChar(50)
+  floor               String?                @db.VarChar(50)
+  houseNumber         String                 @map("house_number") @db.VarChar(80)
+  fullQuarterCode     String?                @unique @map("full_quarter_code") @db.VarChar(150)
+  status              QuarterStatus          @default(AVAILABLE)
+  conditionRemarks    String?                @map("condition_remarks")
+  electricityMeterNo  String?                @map("electricity_meter_no") @db.VarChar(100)
+  waterConnectionNo   String?                @map("water_connection_no") @db.VarChar(100)
+  isActive            Boolean                @default(true) @map("is_active")
+  createdById         String?                @map("created_by") @db.Uuid
+  updatedById         String?                @map("updated_by") @db.Uuid
+  approvedByAdmin     Boolean                @default(false) @map("approved_by_admin")
+  adminApprovedById   String?                @map("admin_approved_by") @db.Uuid
+  adminApprovedAt     DateTime?              @map("admin_approved_at")
+  createdAt           DateTime               @default(now()) @map("created_at")
+  updatedAt           DateTime               @updatedAt @map("updated_at")
+  area                Area                   @relation(fields: [areaId], references: [id])
+  quarterType         QuarterType            @relation(fields: [quarterTypeId], references: [id])
+  createdBy           User?                  @relation("QuarterCreatedBy", fields: [createdById], references: [id])
+  updatedBy           User?                  @relation("QuarterUpdatedBy", fields: [updatedById], references: [id])
+  adminApprovedBy     User?                  @relation("QuarterAdminApprovedBy", fields: [adminApprovedById], references: [id])
+  occupancies         OccupancyRecord[]
+  currentApplications Application[]          @relation("ApplicationCurrentQuarter")
+  allotments          Allotment[]            @relation("AllotmentQuarter")
+  previousAllotments  Allotment[]            @relation("PreviousAllotmentQuarter")
+  statusHistory       QuarterStatusHistory[]
+  changeRequests      QuarterChangeRequest[]
+
+  @@unique([areaId, quarterTypeId, wing, block, floor, houseNumber])
+  @@index([status, areaId, quarterTypeId])
+  @@map("quarters")
+}
+
+model Personnel {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indexNumber         String            @unique @map("index_number") @db.VarChar(80)
+  buckleNumber        String            @unique @map("buckle_number") @db.VarChar(80)
+  fullName            String            @map("full_name") @db.VarChar(150)
+  mobileNumber        String            @map("mobile_number") @db.VarChar(20)
+  designationId       String            @map("designation_id") @db.Uuid
+  currentPoliceUnitId String            @map("current_police_unit_id") @db.Uuid
+  currentAddress      String            @map("current_address")
+  isActive            Boolean           @default(true) @map("is_active")
+  createdById         String?           @map("created_by") @db.Uuid
+  updatedById         String?           @map("updated_by") @db.Uuid
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  designation         Designation       @relation(fields: [designationId], references: [id])
+  currentPoliceUnit   PoliceUnit        @relation(fields: [currentPoliceUnitId], references: [id])
+  createdBy           User?             @relation("PersonnelCreatedBy", fields: [createdById], references: [id])
+  updatedBy           User?             @relation("PersonnelUpdatedBy", fields: [updatedById], references: [id])
+  occupancies         OccupancyRecord[]
+  applications        Application[]
+  allotments          Allotment[]
+  duplicateMatches    DuplicateCheck[]  @relation("MatchedPersonnel")
+
+  @@index([fullName, mobileNumber])
+  @@map("personnel")
+}
+
+model OccupancyRecord {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  personnelId           String    @map("personnel_id") @db.Uuid
+  quarterId             String    @map("quarter_id") @db.Uuid
+  allocatedDate         DateTime  @map("allocated_date") @db.Date
+  possessionDate        DateTime? @map("possession_date") @db.Date
+  vacatedDate           DateTime? @map("vacated_date") @db.Date
+  isCurrent             Boolean   @default(true) @map("is_current")
+  allocationReferenceNo String?   @map("allocation_reference_no") @db.VarChar(100)
+  remarks               String?
+  createdById           String?   @map("created_by") @db.Uuid
+  closedById            String?   @map("closed_by") @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  personnel             Personnel @relation(fields: [personnelId], references: [id])
+  quarter               Quarter   @relation(fields: [quarterId], references: [id])
+  createdBy             User?     @relation("OccupancyCreatedBy", fields: [createdById], references: [id])
+  closedBy              User?     @relation("OccupancyClosedBy", fields: [closedById], references: [id])
+
+  @@index([personnelId, isCurrent])
+  @@index([quarterId, isCurrent])
+  @@map("occupancy_records")
+}
+
+model Application {
+  id                             String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationNo                  String                  @unique @map("application_no") @db.VarChar(100)
+  applicationType                ApplicationType         @map("application_type")
+  personnelId                    String                  @map("personnel_id") @db.Uuid
+  submittedByUserId              String                  @map("submitted_by_user_id") @db.Uuid
+  submittedByUnitId              String                  @map("submitted_by_unit_id") @db.Uuid
+  status                         ApplicationStatus       @default(DRAFT)
+  applyingForGroup               Boolean                 @default(false) @map("applying_for_group")
+  groupDetails                   String?                 @map("group_details")
+  currentQuarterId               String?                 @map("current_quarter_id") @db.Uuid
+  currentQuarterText             String?                 @map("current_quarter_text")
+  reasonForChange                String?                 @map("reason_for_change")
+  isSpecialCase                  Boolean                 @default(false) @map("is_special_case")
+  specialCaseCategory            UrgencyCategory?        @map("special_case_category")
+  specialCaseReason              String?                 @map("special_case_reason")
+  recommendedByOfficer           Boolean                 @default(false) @map("recommended_by_officer")
+  recommendingOfficerName        String?                 @map("recommending_officer_name") @db.VarChar(150)
+  recommendingOfficerDesignation String?                 @map("recommending_officer_designation") @db.VarChar(100)
+  duplicateFlag                  Boolean                 @default(false) @map("duplicate_flag")
+  duplicateSummary               String?                 @map("duplicate_summary")
+  adminRemarks                   String?                 @map("admin_remarks")
+  correspondenceRemarks          String?                 @map("correspondence_remarks")
+  superAdminRemarks              String?                 @map("super_admin_remarks")
+  submittedAt                    DateTime?               @map("submitted_at")
+  closedAt                       DateTime?               @map("closed_at")
+  createdAt                      DateTime                @default(now()) @map("created_at")
+  updatedAt                      DateTime                @updatedAt @map("updated_at")
+  personnel                      Personnel               @relation(fields: [personnelId], references: [id])
+  submittedByUser                User                    @relation("ApplicationSubmittedBy", fields: [submittedByUserId], references: [id])
+  submittedByUnit                PoliceUnit              @relation(fields: [submittedByUnitId], references: [id])
+  currentQuarter                 Quarter?                @relation("ApplicationCurrentQuarter", fields: [currentQuarterId], references: [id])
+  preferences                    ApplicationPreference[]
+  attachments                    Attachment[]
+  duplicateChecks                DuplicateCheck[]        @relation("ApplicationDuplicateChecks")
+  matchedDuplicateChecks         DuplicateCheck[]        @relation("MatchedApplication")
+  approvalHistory                ApprovalHistory[]
+  allotment                      Allotment?
+  notifications                  Notification[]
+
+  @@index([status, submittedAt])
+  @@index([personnelId, status])
+  @@map("applications")
+}
+
+model ApplicationPreference {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId   String      @map("application_id") @db.Uuid
+  areaId          String      @map("area_id") @db.Uuid
+  quarterTypeId   String      @map("quarter_type_id") @db.Uuid
+  preferenceOrder Int         @map("preference_order")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  application     Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  area            Area        @relation(fields: [areaId], references: [id])
+  quarterType     QuarterType @relation(fields: [quarterTypeId], references: [id])
+
+  @@unique([applicationId, preferenceOrder])
+  @@map("application_preferences")
+}
+
+model Attachment {
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId    String         @map("application_id") @db.Uuid
+  uploadedByUserId String         @map("uploaded_by_user_id") @db.Uuid
+  attachmentType   AttachmentType @map("attachment_type")
+  originalFileName String         @map("original_file_name") @db.VarChar(255)
+  storedFileName   String         @map("stored_file_name") @db.VarChar(255)
+  filePath         String         @map("file_path")
+  mimeType         String         @map("mime_type") @db.VarChar(100)
+  fileSizeBytes    BigInt         @map("file_size_bytes")
+  description      String?
+  isVerified       Boolean        @default(false) @map("is_verified")
+  verifiedById     String?        @map("verified_by") @db.Uuid
+  verifiedAt       DateTime?      @map("verified_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  application      Application    @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  uploadedBy       User           @relation("AttachmentUploadedBy", fields: [uploadedByUserId], references: [id])
+  verifiedBy       User?          @relation("AttachmentVerifiedBy", fields: [verifiedById], references: [id])
+
+  @@map("attachments")
+}
+
+model DuplicateCheck {
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId        String                 @map("application_id") @db.Uuid
+  matchedPersonnelId   String?                @map("matched_personnel_id") @db.Uuid
+  matchedApplicationId String?                @map("matched_application_id") @db.Uuid
+  matchStrength        DuplicateMatchStrength @map("match_strength")
+  matchReason          String                 @map("match_reason")
+  matchScore           Int                    @default(0) @map("match_score")
+  reviewedById         String?                @map("reviewed_by") @db.Uuid
+  reviewedAt           DateTime?              @map("reviewed_at")
+  isConfirmedDuplicate Boolean?               @map("is_confirmed_duplicate")
+  reviewRemarks        String?                @map("review_remarks")
+  createdAt            DateTime               @default(now()) @map("created_at")
+  application          Application            @relation("ApplicationDuplicateChecks", fields: [applicationId], references: [id], onDelete: Cascade)
+  matchedPersonnel     Personnel?             @relation("MatchedPersonnel", fields: [matchedPersonnelId], references: [id])
+  matchedApplication   Application?           @relation("MatchedApplication", fields: [matchedApplicationId], references: [id])
+  reviewedBy           User?                  @relation("DuplicateReviewedBy", fields: [reviewedById], references: [id])
+
+  @@map("duplicate_checks")
+}
+
+model ApprovalHistory {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId String             @map("application_id") @db.Uuid
+  action        ApprovalAction
+  fromStatus    ApplicationStatus? @map("from_status")
+  toStatus      ApplicationStatus? @map("to_status")
+  remarks       String?
+  actedById     String             @map("acted_by") @db.Uuid
+  actedAt       DateTime           @default(now()) @map("acted_at")
+  application   Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  actedBy       User               @relation("ApprovalActedBy", fields: [actedById], references: [id])
+
+  @@map("approval_history")
+}
+
+model Allotment {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId     String      @unique @map("application_id") @db.Uuid
+  personnelId       String      @map("personnel_id") @db.Uuid
+  quarterId         String      @map("quarter_id") @db.Uuid
+  previousQuarterId String?     @map("previous_quarter_id") @db.Uuid
+  allotmentOrderNo  String?     @unique @map("allotment_order_no") @db.VarChar(100)
+  allotmentDate     DateTime    @map("allotment_date") @db.Date
+  possessionDueDate DateTime?   @map("possession_due_date") @db.Date
+  remarks           String?
+  approvedById      String      @map("approved_by") @db.Uuid
+  createdAt         DateTime    @default(now()) @map("created_at")
+  application       Application @relation(fields: [applicationId], references: [id])
+  personnel         Personnel   @relation(fields: [personnelId], references: [id])
+  quarter           Quarter     @relation("AllotmentQuarter", fields: [quarterId], references: [id])
+  previousQuarter   Quarter?    @relation("PreviousAllotmentQuarter", fields: [previousQuarterId], references: [id])
+  approvedBy        User        @relation("AllotmentApprovedBy", fields: [approvedById], references: [id])
+
+  @@map("allotments")
+}
+
+model QuarterStatusHistory {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  quarterId   String         @map("quarter_id") @db.Uuid
+  oldStatus   QuarterStatus? @map("old_status")
+  newStatus   QuarterStatus  @map("new_status")
+  reason      String?
+  changedById String         @map("changed_by") @db.Uuid
+  changedAt   DateTime       @default(now()) @map("changed_at")
+  quarter     Quarter        @relation(fields: [quarterId], references: [id])
+  changedBy   User           @relation("QuarterStatusChangedBy", fields: [changedById], references: [id])
+
+  @@map("quarter_status_history")
+}
+
+model AuditLog {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String?   @map("user_id") @db.Uuid
+  userRole   UserRole? @map("user_role")
+  action     String    @db.VarChar(100)
+  entityType String    @map("entity_type") @db.VarChar(100)
+  entityId   String?   @map("entity_id") @db.Uuid
+  oldValue   Json?     @map("old_value")
+  newValue   Json?     @map("new_value")
+  ipAddress  String?   @map("ip_address") @db.VarChar(80)
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  user       User?     @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model RefreshSession {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_sessions")
+}
+
+model Notification {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String       @map("user_id") @db.Uuid
+  applicationId String?      @map("application_id") @db.Uuid
+  title         String       @db.VarChar(150)
+  message       String
+  isRead        Boolean      @default(false) @map("is_read")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application   Application? @relation(fields: [applicationId], references: [id])
+
+  @@index([userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+model QuarterChangeRequest {
+  id           String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requestType  ChangeRequestType   @map("request_type")
+  quarterId    String?             @map("quarter_id") @db.Uuid
+  payload      Json
+  status       ChangeRequestStatus @default(PENDING)
+  remarks      String?
+  createdById  String              @map("created_by") @db.Uuid
+  reviewedById String?             @map("reviewed_by") @db.Uuid
+  reviewedAt   DateTime?           @map("reviewed_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  quarter      Quarter?            @relation(fields: [quarterId], references: [id])
+  createdBy    User                @relation("ChangeRequestCreatedBy", fields: [createdById], references: [id])
+  reviewedBy   User?               @relation("ChangeRequestReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([status, createdAt])
+  @@map("quarter_change_requests")
+}
