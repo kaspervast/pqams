@@ -107,6 +107,21 @@ function sortByQueuePosition<T extends ApplicationPayload & { seniority?: { over
   });
 }
 
+async function assertFirstPendingInStage(applicationId: string, stageStatuses: ApplicationStatus[]) {
+  const queue = await prisma.application.findMany({
+    where: { status: { in: seniorityApplicationStatuses }, submittedAt: { not: null } },
+    select: { id: true, applicationNo: true, status: true, isSpecialCase: true, submittedAt: true, createdAt: true },
+    orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }, { createdAt: "asc" }]
+  });
+  const firstPending = queue.find((application) => stageStatuses.includes(application.status));
+  if (firstPending && firstPending.id !== applicationId) {
+    throw new ApiError(
+      409,
+      `Sequential processing required. Clear ${firstPending.applicationNo} (${firstPending.status}) before processing later applications.`
+    );
+  }
+}
+
 const applicantSchema = z.object({
   indexNumber: z.string().trim().min(1),
   buckleNumber: z.string().trim().min(1),
@@ -430,6 +445,7 @@ router.delete("/attachments/:id", allow(UserRole.UNIT_USER, UserRole.ADMIN), asy
 async function transition(req: Request, id: string, from: ApplicationStatus[], to: ApplicationStatus, remarks?: string) {
   const application = await prisma.application.findUniqueOrThrow({ where: { id } });
   if (!from.includes(application.status)) throw new ApiError(409, `Application is not pending this action (${application.status})`);
+  await assertFirstPendingInStage(id, from);
   ensureTransition(application.status, to);
   return prisma.$transaction(async (tx) => {
     const updated = await tx.application.update({
@@ -454,6 +470,7 @@ router.post("/applications/:id/special-case/reject", allow(UserRole.ADMIN), asyn
     throw new ApiError(409, `Special-case priority cannot be reviewed while application is ${current.status}`);
   }
   if (!current.isSpecialCase) throw new ApiError(409, "Application is already in the regular seniority queue");
+  await assertFirstPendingInStage(id, [ApplicationStatus.ADMIN_REVIEW, ApplicationStatus.DUPLICATE_REVIEW]);
   const updated = await prisma.$transaction(async (tx) => {
     const regularApplication = await tx.application.update({
       where: { id },
@@ -530,8 +547,9 @@ for (const [path, status, message] of [
 const allotSchema = z.object({ quarterId: z.string().uuid(), allotmentDate: z.coerce.date(), possessionDueDate: z.coerce.date().optional().nullable(), remarks: z.string().optional() });
 router.post("/applications/:id/super-admin/allot", allow(UserRole.SUPER_ADMIN), asyncHandler(async (req, res) => {
   const input = allotSchema.parse(req.body);
+  const applicationId = pathParam(req);
+  await assertFirstPendingInStage(applicationId, [ApplicationStatus.APPROVED_PENDING_ALLOTMENT]);
   const application = await prisma.$transaction(async (tx) => {
-    const applicationId = pathParam(req);
     await tx.$queryRaw`SELECT id FROM applications WHERE id = ${applicationId}::uuid FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM quarters WHERE id = ${input.quarterId}::uuid FOR UPDATE`;
     const current = await tx.application.findUniqueOrThrow({ where: { id: applicationId }, include: { preferences: true, personnel: true } });

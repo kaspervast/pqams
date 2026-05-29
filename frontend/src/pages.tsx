@@ -640,6 +640,18 @@ export function ApplicationsPage() {
   const decision = async (url: string, body: AnyRow = {}) => {
     try { await api.post(url, body); setSelected(null); await reload(); } catch (e) { setRequestError(e); }
   };
+  const firstInStage = (statuses: string[]) => applications.find((application: AnyRow) => statuses.includes(application.status));
+  const sequentialBlocker = selected ? (() => {
+    const stage =
+      user?.role === "ADMIN" && ["ADMIN_REVIEW", "DUPLICATE_REVIEW"].includes(selected.status) ? ["DUPLICATE_REVIEW", "ADMIN_REVIEW"] :
+      user?.role === "CORRESPONDENCE_BRANCH" && selected.status === "CORRESPONDENCE_REVIEW" ? ["CORRESPONDENCE_REVIEW"] :
+      user?.role === "SUPER_ADMIN" && selected.status === "SUPER_ADMIN_REVIEW" ? ["SUPER_ADMIN_REVIEW"] :
+      user?.role === "SUPER_ADMIN" && selected.status === "APPROVED_PENDING_ALLOTMENT" ? ["APPROVED_PENDING_ALLOTMENT"] :
+      [];
+    const first = stage.length ? firstInStage(stage) : null;
+    return first && first.id !== selected.id ? first : null;
+  })() : null;
+  const isSequentiallyAllowed = !sequentialBlocker;
   return <Page title="Applications">
     <ErrorText error={error || requestError} />
     {user?.role === "SUPER_ADMIN" && <Alert severity="info" sx={{ mb: 2 }}>
@@ -717,30 +729,33 @@ export function ApplicationsPage() {
           {user?.role === "SUPER_ADMIN" && selected.status === "ADMIN_REVIEW" && <Alert severity="warning">Waiting for Administrator verification. Allotment actions become available after the application is forwarded through Correspondence review.</Alert>}
           {user?.role === "SUPER_ADMIN" && selected.status === "CORRESPONDENCE_REVIEW" && <Alert severity="warning">Waiting for Correspondence verification. Once forwarded, you can approve this request for final allotment.</Alert>}
           {user?.role === "SUPER_ADMIN" && selected.status === "SUPER_ADMIN_REVIEW" && <Alert severity="success">Verification is complete. Use <b>Approve For Allotment</b> below to enable quarter selection for this request.</Alert>}
+          {sequentialBlocker && <Alert severity="error">
+            Sequential processing is enforced. Clear <b>{sequentialBlocker.applicationNo}</b> at queue position <b>#{sequentialBlocker.seniority?.overallPosition ?? "-"}</b> before taking action on this application.
+          </Alert>}
           <Divider />
           <Typography fontWeight={600}>Attachments</Typography>
           {selected.attachments.map((a: AnyRow) => <Button key={a.id} startIcon={<DownloadIcon />} onClick={() => downloadFile(`/attachments/${a.id}/download`, a.originalFileName)}>{a.attachmentType}</Button>)}
           {user?.role === "SUPER_ADMIN" && selected.status === "APPROVED_PENDING_ALLOTMENT" && <Paper variant="outlined" sx={{ p: 2, mt: 1 }}>
             <Typography variant="subtitle1" fontWeight={650} mb={1}>Allot Quarter</Typography>
             <Typography variant="body2" color="text.secondary" mb={2}>Select an available quarter matching the requested eligible types, then complete final allotment.</Typography>
-            <AllotControl quarters={available} application={selected} action={decision} />
+            <AllotControl quarters={available} application={selected} action={decision} disabled={!isSequentiallyAllowed} />
           </Paper>}
         </Stack>}
       </DialogContent>
       <DialogActions>
         {selected && user?.role === "ADMIN" && (selected.status === "ADMIN_REVIEW" || selected.status === "DUPLICATE_REVIEW") && <>
-          <Button onClick={() => decision(`/applications/${selected.id}/admin-review`, { action: "VERIFY" })}>{selected.status === "DUPLICATE_REVIEW" ? "Clear Duplicate" : "Verify"}</Button>
-          {selected.isSpecialCase && <Button color="warning" onClick={() => decision(`/applications/${selected.id}/special-case/reject`)}>Reject Special Priority</Button>}
-          <Button color="error" onClick={() => decision(`/applications/${selected.id}/admin-review`, { action: "REJECT" })}>Reject Application</Button>
+          <Button disabled={!isSequentiallyAllowed} onClick={() => decision(`/applications/${selected.id}/admin-review`, { action: "VERIFY" })}>{selected.status === "DUPLICATE_REVIEW" ? "Clear Duplicate" : "Verify"}</Button>
+          {selected.isSpecialCase && <Button disabled={!isSequentiallyAllowed} color="warning" onClick={() => decision(`/applications/${selected.id}/special-case/reject`)}>Reject Special Priority</Button>}
+          <Button disabled={!isSequentiallyAllowed} color="error" onClick={() => decision(`/applications/${selected.id}/admin-review`, { action: "REJECT" })}>Reject Application</Button>
         </>}
         {selected && user?.role === "CORRESPONDENCE_BRANCH" && selected.status === "CORRESPONDENCE_REVIEW" && <>
-          <Button onClick={() => decision(`/applications/${selected.id}/correspondence-review`, { action: "VERIFY" })}>Verify</Button>
-          <Button onClick={() => decision(`/applications/${selected.id}/correspondence-review`, { action: "RETURN" })}>Return</Button>
+          <Button disabled={!isSequentiallyAllowed} onClick={() => decision(`/applications/${selected.id}/correspondence-review`, { action: "VERIFY" })}>Verify</Button>
+          <Button disabled={!isSequentiallyAllowed} onClick={() => decision(`/applications/${selected.id}/correspondence-review`, { action: "RETURN" })}>Return</Button>
         </>}
         {selected && user?.role === "SUPER_ADMIN" && selected.status === "SUPER_ADMIN_REVIEW" && <>
-          <Button variant="contained" onClick={() => decision(`/applications/${selected.id}/super-admin/approve-pending-allotment`)}>Approve For Allotment</Button>
-          <Button onClick={() => decision(`/applications/${selected.id}/super-admin/approve-waitlist`)}>Waitlist</Button>
-          <Button color="error" onClick={() => decision(`/applications/${selected.id}/super-admin/reject`)}>Reject</Button>
+          <Button disabled={!isSequentiallyAllowed} variant="contained" onClick={() => decision(`/applications/${selected.id}/super-admin/approve-pending-allotment`)}>Approve For Allotment</Button>
+          <Button disabled={!isSequentiallyAllowed} onClick={() => decision(`/applications/${selected.id}/super-admin/approve-waitlist`)}>Waitlist</Button>
+          <Button disabled={!isSequentiallyAllowed} color="error" onClick={() => decision(`/applications/${selected.id}/super-admin/reject`)}>Reject</Button>
         </>}
         {selected && user?.role === "UNIT_USER" && selected.status === "RETURNED_FOR_RECONSIDERATION" && <Button onClick={() => decision(`/applications/${selected.id}/resubmit`)}>Resubmit Corrected Application</Button>}
         {selected?.status === "CLOSED" && <Button onClick={() => downloadFile(`/applications/${selected.id}/allotment-order/pdf`, "allotment-order.pdf")}>Allotment Order</Button>}
@@ -749,7 +764,7 @@ export function ApplicationsPage() {
     </Dialog>
   </Page>;
 }
-function AllotControl({ quarters, application, action }: { quarters: AnyRow[]; application: AnyRow; action: (url: string, body: AnyRow) => Promise<void> }) {
+function AllotControl({ quarters, application, action, disabled = false }: { quarters: AnyRow[]; application: AnyRow; action: (url: string, body: AnyRow) => Promise<void>; disabled?: boolean }) {
   const [quarterId, setQuarterId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const requestedTypeIds = new Set(application.preferences.map((preference: AnyRow) => preference.quarterType.id));
@@ -759,7 +774,7 @@ function AllotControl({ quarters, application, action }: { quarters: AnyRow[]; a
       {matchingQuarters.map((q) => <MenuItem key={q.id} value={q.id}>{q.area.name} / {q.quarterType.name} / {q.fullQuarterCode ?? q.houseNumber}</MenuItem>)}
     </TextField>
     <TextField type="date" label="Allotment Date" value={date} onChange={(e) => setDate(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-    <Button variant="contained" disabled={!quarterId} onClick={() => action(`/applications/${application.id}/super-admin/allot`, { quarterId, allotmentDate: date })}>Allot Quarter</Button>
+    <Button variant="contained" disabled={disabled || !quarterId} onClick={() => action(`/applications/${application.id}/super-admin/allot`, { quarterId, allotmentDate: date })}>Allot Quarter</Button>
     {!matchingQuarters.length && <Typography color="error.main">No available quarter matches the requested types.</Typography>}
   </Stack>;
 }
