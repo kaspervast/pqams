@@ -5,10 +5,12 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import PDFDocument from "pdfkit";
 import {
+  ApprovalAction,
   ApplicationStatus,
   ApplicationType,
   AttachmentType,
   DuplicateMatchStrength,
+  Prisma,
   QuarterStatus,
   UserRole
 } from "@prisma/client";
@@ -18,7 +20,7 @@ import { prisma } from "../prisma.js";
 import { audit, notifyRole, notifyUser } from "../lib/activity.js";
 import { ApiError, asyncHandler, ok, pathParam } from "../lib/http.js";
 import { allow, authenticate, requireChangedPassword } from "../middleware/auth.js";
-import { actionForStatus, activeApplicationStatuses, canReadApplication, ensureTransition } from "../services/workflow.js";
+import { actionForStatus, activeApplicationStatuses, canReadApplication, ensureTransition, seniorityApplicationStatuses } from "../services/workflow.js";
 
 const router = Router();
 router.use(authenticate, requireChangedPassword);
@@ -58,13 +60,69 @@ const applicationInclude = {
   approvalHistory: { include: { actedBy: { select: { fullName: true, role: true } } }, orderBy: { actedAt: "desc" as const } },
   allotment: { include: { quarter: { include: { area: true, quarterType: true } }, approvedBy: { select: { fullName: true } } } }
 };
+type ApplicationPayload = Prisma.ApplicationGetPayload<{ include: typeof applicationInclude }>;
+
+async function appendSeniority(applications: ApplicationPayload[]) {
+  if (!applications.length) return applications.map((application) => ({ ...application, seniority: null }));
+  const queue = await prisma.application.findMany({
+    where: { status: { in: seniorityApplicationStatuses }, submittedAt: { not: null } },
+    include: { preferences: { include: { quarterType: true }, orderBy: { preferenceOrder: "asc" } } },
+    orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }, { createdAt: "asc" }]
+  });
+  const caseCounters = new Map<string, number>();
+  const typeCounters = new Map<string, number>();
+  const typeCaseCounters = new Map<string, number>();
+  const positions = new Map<string, {
+    overallPosition: number;
+    casePosition: number;
+    caseType: "SPECIAL" | "REGULAR";
+    caseLabel: string;
+    typeSeniority: Array<{ quarterTypeId: string; quarterType: string; position: number; casePosition: number; caseLabel: string }>;
+  }>();
+  queue.forEach((application, index) => {
+    const caseType = application.isSpecialCase ? "SPECIAL" : "REGULAR";
+    const caseLabel = application.isSpecialCase ? "Special Case" : "Regular";
+    const casePosition = (caseCounters.get(caseType) ?? 0) + 1;
+    caseCounters.set(caseType, casePosition);
+    const typeSeniority = [...new Map(application.preferences.map((preference) => [preference.quarterTypeId, preference.quarterType.name])).entries()]
+      .map(([quarterTypeId, quarterType]) => {
+        const position = (typeCounters.get(quarterTypeId) ?? 0) + 1;
+        const typeCaseKey = `${quarterTypeId}:${caseType}`;
+        const typeCasePosition = (typeCaseCounters.get(typeCaseKey) ?? 0) + 1;
+        typeCounters.set(quarterTypeId, position);
+        typeCaseCounters.set(typeCaseKey, typeCasePosition);
+        return { quarterTypeId, quarterType, position, casePosition: typeCasePosition, caseLabel };
+      });
+    positions.set(application.id, { overallPosition: index + 1, casePosition, caseType, caseLabel, typeSeniority });
+  });
+  return applications.map((application) => ({ ...application, seniority: positions.get(application.id) ?? null }));
+}
+
+function sortByQueuePosition<T extends ApplicationPayload & { seniority?: { overallPosition: number } | null }>(applications: T[]) {
+  return [...applications].sort((left, right) => {
+    const leftPosition = left.seniority?.overallPosition ?? Number.POSITIVE_INFINITY;
+    const rightPosition = right.seniority?.overallPosition ?? Number.POSITIVE_INFINITY;
+    if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+    return right.createdAt.getTime() - left.createdAt.getTime();
+  });
+}
+
+const applicantSchema = z.object({
+  indexNumber: z.string().trim().min(1),
+  buckleNumber: z.string().trim().min(1),
+  fullName: z.string().trim().min(2),
+  mobileNumber: z.string().trim().min(10).max(20),
+  designationId: z.string().uuid(),
+  currentAddress: z.string().trim().min(5),
+  serviceJoinDate: z.coerce.date(),
+  lastPostingOutsideRajkot: z.string().trim().max(200).optional().nullable()
+});
 
 const applicationBase = z.object({
   applicationType: z.nativeEnum(ApplicationType),
-  personnelId: z.string().uuid(),
+  applicant: applicantSchema,
   applyingForGroup: z.boolean().default(false),
   groupDetails: z.string().optional().nullable(),
-  currentQuarterId: z.string().uuid().optional().nullable(),
   currentQuarterText: z.string().optional().nullable(),
   reasonForChange: z.string().optional().nullable(),
   isSpecialCase: z.boolean().default(false),
@@ -80,9 +138,6 @@ const applicationBase = z.object({
   })).min(1).max(3)
 });
 const applicationSchema = applicationBase.superRefine((input, ctx) => {
-  if (input.applicationType === ApplicationType.TRANSFER_CHANGE && !input.reasonForChange?.trim()) {
-    ctx.addIssue({ code: "custom", message: "Reason for change is required", path: ["reasonForChange"] });
-  }
   if (input.isSpecialCase && (!input.specialCaseCategory || !input.specialCaseReason?.trim())) {
     ctx.addIssue({ code: "custom", message: "Special case category and reason are required", path: ["specialCaseReason"] });
   }
@@ -90,6 +145,38 @@ const applicationSchema = applicationBase.superRefine((input, ctx) => {
     ctx.addIssue({ code: "custom", message: "Group details are required", path: ["groupDetails"] });
   }
 });
+
+async function resolveApplicant(
+  tx: Prisma.TransactionClient,
+  input: z.infer<typeof applicantSchema>,
+  policeUnitId: string,
+  actorId: string
+) {
+  const matches = await tx.personnel.findMany({
+    where: { OR: [{ indexNumber: input.indexNumber }, { buckleNumber: input.buckleNumber }] }
+  });
+  if (new Set(matches.map((personnel) => personnel.id)).size > 1) {
+    throw new ApiError(409, "Index number and buckle number match different personnel records. Contact Admin for correction.");
+  }
+  const data = {
+    indexNumber: input.indexNumber,
+    buckleNumber: input.buckleNumber,
+    fullName: input.fullName,
+    mobileNumber: input.mobileNumber,
+    designationId: input.designationId,
+    currentPoliceUnitId: policeUnitId,
+    currentAddress: input.currentAddress,
+    serviceJoinDate: input.serviceJoinDate,
+    lastPostingOutsideRajkot: input.lastPostingOutsideRajkot || null
+  };
+  let personnel = matches[0];
+  if (personnel && !personnel.isActive) throw new ApiError(409, "The matched personnel record is inactive. Contact Admin before applying.");
+  personnel = personnel
+    ? await tx.personnel.update({ where: { id: personnel.id }, data: { ...data, updatedById: actorId } })
+    : await tx.personnel.create({ data: { ...data, createdById: actorId } });
+  const occupancy = await tx.occupancyRecord.findFirst({ where: { personnelId: personnel.id, isCurrent: true } });
+  return { personnel, occupancy };
+}
 
 function assertAccess(application: { submittedByUnitId: string }) {
   return (req: Request) => {
@@ -120,58 +207,98 @@ router.get("/applications", asyncHandler(async (req, res) => {
     include: applicationInclude,
     orderBy: [{ isSpecialCase: "desc" }, { createdAt: "desc" }]
   });
-  return ok(res, applications);
+  return ok(res, sortByQueuePosition(await appendSeniority(applications)));
 }));
-router.get("/applications/pending/admin", allow(UserRole.ADMIN, UserRole.VIEWER), asyncHandler(async (_req, res) => ok(res, await prisma.application.findMany({ where: { status: { in: [ApplicationStatus.ADMIN_REVIEW, ApplicationStatus.DUPLICATE_REVIEW] } }, include: applicationInclude, orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }] }))));
-router.get("/applications/pending/correspondence", allow(UserRole.CORRESPONDENCE_BRANCH, UserRole.VIEWER), asyncHandler(async (_req, res) => ok(res, await prisma.application.findMany({ where: { status: ApplicationStatus.CORRESPONDENCE_REVIEW }, include: applicationInclude, orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }] }))));
-router.get("/applications/pending/super-admin", allow(UserRole.SUPER_ADMIN, UserRole.VIEWER), asyncHandler(async (_req, res) => ok(res, await prisma.application.findMany({ where: { status: { in: [ApplicationStatus.SUPER_ADMIN_REVIEW, ApplicationStatus.APPROVED_PENDING_ALLOTMENT] } }, include: applicationInclude, orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }] }))));
+router.get("/applications/pending/admin", allow(UserRole.ADMIN, UserRole.VIEWER), asyncHandler(async (_req, res) => {
+  const applications = await prisma.application.findMany({ where: { status: { in: [ApplicationStatus.ADMIN_REVIEW, ApplicationStatus.DUPLICATE_REVIEW] } }, include: applicationInclude, orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }] });
+  return ok(res, sortByQueuePosition(await appendSeniority(applications)));
+}));
+router.get("/applications/pending/correspondence", allow(UserRole.CORRESPONDENCE_BRANCH, UserRole.VIEWER), asyncHandler(async (_req, res) => {
+  const applications = await prisma.application.findMany({ where: { status: ApplicationStatus.CORRESPONDENCE_REVIEW }, include: applicationInclude, orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }] });
+  return ok(res, sortByQueuePosition(await appendSeniority(applications)));
+}));
+router.get("/applications/pending/super-admin", allow(UserRole.SUPER_ADMIN, UserRole.VIEWER), asyncHandler(async (_req, res) => {
+  const applications = await prisma.application.findMany({ where: { status: { in: [ApplicationStatus.SUPER_ADMIN_REVIEW, ApplicationStatus.APPROVED_PENDING_ALLOTMENT] } }, include: applicationInclude, orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }] });
+  return ok(res, sortByQueuePosition(await appendSeniority(applications)));
+}));
 router.get("/applications/:id", asyncHandler(async (req, res) => {
   const application = await getApplication(pathParam(req));
   assertAccess(application)(req);
-  return ok(res, application);
+  const [withSeniority] = await appendSeniority([application]);
+  return ok(res, withSeniority);
 }));
 router.post("/applications", allow(UserRole.UNIT_USER), asyncHandler(async (req, res) => {
   const input = applicationSchema.parse(req.body);
-  const personnel = await prisma.personnel.findUnique({ where: { id: input.personnelId } });
-  if (!personnel || personnel.currentPoliceUnitId !== req.auth!.policeUnitId) throw new ApiError(403, "Application personnel must belong to your unit");
-  if (!personnel.isActive) throw new ApiError(409, "Inactive personnel cannot submit a new application");
-  const applicationNo = `PQAMS-${new Date().getFullYear()}-${Date.now()}`;
-  const application = await prisma.application.create({
-    data: {
-      applicationType: input.applicationType,
-      personnelId: input.personnelId,
-      applyingForGroup: input.applyingForGroup,
-      groupDetails: input.groupDetails,
-      currentQuarterId: input.currentQuarterId,
-      currentQuarterText: input.currentQuarterText,
-      reasonForChange: input.reasonForChange,
-      isSpecialCase: input.isSpecialCase,
-      specialCaseCategory: input.specialCaseCategory,
-      specialCaseReason: input.specialCaseReason,
-      recommendedByOfficer: input.recommendedByOfficer,
-      recommendingOfficerName: input.recommendingOfficerName,
-      recommendingOfficerDesignation: input.recommendingOfficerDesignation,
-      preferences: { create: input.preferences },
-      submittedByUserId: req.auth!.id,
-      submittedByUnitId: req.auth!.policeUnitId!,
-      applicationNo
-    },
-    include: applicationInclude
+  const application = await prisma.$transaction(async (tx) => {
+    const { personnel, occupancy } = await resolveApplicant(tx, input.applicant, req.auth!.policeUnitId!, req.auth!.id);
+    const active = await tx.application.findFirst({ where: { personnelId: personnel.id, status: { in: activeApplicationStatuses } } });
+    if (active) throw new ApiError(409, `Personnel already has an active application (${active.applicationNo})`);
+    const applicationType = input.applicationType;
+    if (applicationType === ApplicationType.NEW_ALLOTMENT && occupancy) {
+      throw new ApiError(409, "Personnel already occupies a quarter. Select Transfer / Quarter Change.");
+    }
+    if (applicationType === ApplicationType.TRANSFER_CHANGE && !occupancy) {
+      throw new ApiError(409, "Transfer / Quarter Change is available only for personnel currently occupying a quarter.");
+    }
+    if (applicationType === ApplicationType.TRANSFER_CHANGE && !input.reasonForChange?.trim()) {
+      throw new ApiError(400, "Reason for change is required for a transfer/change request");
+    }
+    const applicationNo = `PQAMS-${new Date().getFullYear()}-${Date.now()}`;
+    return tx.application.create({
+      data: {
+        applicationType,
+        personnelId: personnel.id,
+        applyingForGroup: input.applyingForGroup,
+        groupDetails: input.groupDetails,
+        currentQuarterId: occupancy?.quarterId ?? null,
+        currentQuarterText: input.currentQuarterText,
+        reasonForChange: input.reasonForChange,
+        isSpecialCase: input.isSpecialCase,
+        specialCaseCategory: input.specialCaseCategory,
+        specialCaseReason: input.specialCaseReason,
+        recommendedByOfficer: input.recommendedByOfficer,
+        recommendingOfficerName: input.recommendingOfficerName,
+        recommendingOfficerDesignation: input.recommendingOfficerDesignation,
+        preferences: { create: input.preferences },
+        submittedByUserId: req.auth!.id,
+        submittedByUnitId: req.auth!.policeUnitId!,
+        applicationNo
+      },
+      include: applicationInclude
+    });
   });
   await audit(req, { action: "APPLICATION_CREATE", entityType: "APPLICATION", entityId: application.id, newValue: input });
   return ok(res, application, "Draft application created", 201);
 }));
 router.patch("/applications/:id", allow(UserRole.UNIT_USER), asyncHandler(async (req, res) => {
-  const input = applicationBase.partial().omit({ personnelId: true, applicationType: true }).parse(req.body);
+  const input = applicationBase.partial().parse(req.body);
   const existing = await getApplication(pathParam(req));
   assertAccess(existing)(req);
   if (!([ApplicationStatus.DRAFT, ApplicationStatus.RETURNED_FOR_RECONSIDERATION] as ApplicationStatus[]).includes(existing.status)) throw new ApiError(409, "Only draft or returned applications can be changed");
   const application = await prisma.$transaction(async (tx) => {
+    if (input.applicant) {
+      const conflict = await tx.personnel.findFirst({
+        where: {
+          id: { not: existing.personnelId },
+          OR: [{ indexNumber: input.applicant.indexNumber }, { buckleNumber: input.applicant.buckleNumber }]
+        }
+      });
+      if (conflict) throw new ApiError(409, "Index number or buckle number is already assigned to another personnel record");
+      await tx.personnel.update({
+        where: { id: existing.personnelId },
+        data: {
+          ...input.applicant,
+          lastPostingOutsideRajkot: input.applicant.lastPostingOutsideRajkot || null,
+          currentPoliceUnitId: req.auth!.policeUnitId!,
+          updatedById: req.auth!.id
+        }
+      });
+    }
     if (input.preferences) {
       await tx.applicationPreference.deleteMany({ where: { applicationId: existing.id } });
       await tx.applicationPreference.createMany({ data: input.preferences.map((preference) => ({ ...preference, applicationId: existing.id })) });
     }
-    const { preferences: _preferences, ...data } = input;
+    const { preferences: _preferences, applicant: _applicant, ...data } = input;
     return tx.application.update({ where: { id: existing.id }, data, include: applicationInclude });
   });
   await audit(req, { action: "APPLICATION_UPDATE", entityType: "APPLICATION", entityId: application.id, newValue: input });
@@ -218,7 +345,7 @@ async function submit(id: string, userId: string) {
     ensureTransition(ApplicationStatus.SUBMITTED, targetStatus);
     const updated = await tx.application.update({
       where: { id },
-      data: { status: targetStatus, submittedAt: new Date(), duplicateFlag: softMatches.length > 0, duplicateSummary: softMatches.length ? `${softMatches.length} possible match(es) require review` : null },
+      data: { status: targetStatus, submittedAt: application.submittedAt ?? new Date(), duplicateFlag: softMatches.length > 0, duplicateSummary: softMatches.length ? `${softMatches.length} possible match(es) require review` : null },
       include: applicationInclude
     });
     await tx.approvalHistory.create({ data: { applicationId: id, action: "VERIFIED", fromStatus: ApplicationStatus.SUBMITTED, toStatus: targetStatus, actedById: userId, remarks: softMatches.length ? "Potential duplicate detected" : "Automated validation passed" } });
@@ -319,6 +446,46 @@ async function transition(req: Request, id: string, from: ApplicationStatus[], t
   });
 }
 const remarksSchema = z.object({ action: z.string().optional(), remarks: z.string().optional() });
+router.post("/applications/:id/special-case/reject", allow(UserRole.ADMIN), asyncHandler(async (req, res) => {
+  const { remarks } = remarksSchema.parse(req.body);
+  const id = pathParam(req);
+  const current = await prisma.application.findUniqueOrThrow({ where: { id } });
+  if (!([ApplicationStatus.ADMIN_REVIEW, ApplicationStatus.DUPLICATE_REVIEW] as ApplicationStatus[]).includes(current.status)) {
+    throw new ApiError(409, `Special-case priority cannot be reviewed while application is ${current.status}`);
+  }
+  if (!current.isSpecialCase) throw new ApiError(409, "Application is already in the regular seniority queue");
+  const updated = await prisma.$transaction(async (tx) => {
+    const regularApplication = await tx.application.update({
+      where: { id },
+      data: {
+        isSpecialCase: false,
+        specialCaseCategory: null,
+        specialCaseReason: null,
+        adminRemarks: remarks
+      }
+    });
+    await tx.approvalHistory.create({
+      data: {
+        applicationId: id,
+        action: ApprovalAction.SPECIAL_CASE_REJECTED,
+        fromStatus: current.status,
+        toStatus: current.status,
+        remarks: remarks ?? "Special-case priority declined; application retained in regular seniority queue",
+        actedById: req.auth!.id
+      }
+    });
+    return regularApplication;
+  });
+  await notifyUser(updated.submittedByUserId, "Special-case priority declined", `${updated.applicationNo} continues in the regular seniority queue`, updated.id);
+  await audit(req, {
+    action: "SPECIAL_CASE_PRIORITY_REJECT",
+    entityType: "APPLICATION",
+    entityId: updated.id,
+    oldValue: { isSpecialCase: true, category: current.specialCaseCategory, reason: current.specialCaseReason },
+    newValue: { isSpecialCase: false, status: updated.status }
+  });
+  return ok(res, updated, "Special-case priority declined; application moved to regular seniority");
+}));
 router.post("/applications/:id/admin-review", allow(UserRole.ADMIN), asyncHandler(async (req, res) => {
   const { action, remarks } = remarksSchema.parse(req.body);
   const current = await prisma.application.findUniqueOrThrow({ where: { id: pathParam(req) } });
@@ -371,8 +538,24 @@ router.post("/applications/:id/super-admin/allot", allow(UserRole.SUPER_ADMIN), 
     if (current.status !== ApplicationStatus.APPROVED_PENDING_ALLOTMENT) throw new ApiError(409, "Application must be approved pending allotment first");
     const quarter = await tx.quarter.findUniqueOrThrow({ where: { id: input.quarterId } });
     if (quarter.status !== QuarterStatus.AVAILABLE || !quarter.approvedByAdmin) throw new ApiError(409, "Quarter is not available for allotment");
+    if (!current.preferences.some((preference) => preference.quarterTypeId === quarter.quarterTypeId)) {
+      throw new ApiError(400, "Selected quarter type was not requested in this application");
+    }
     const eligible = await tx.eligibilityRule.findUnique({ where: { designationId_quarterTypeId: { designationId: current.personnel.designationId, quarterTypeId: quarter.quarterTypeId } } });
     if (!eligible?.isEligible) throw new ApiError(400, "Selected quarter type is not eligible for this personnel");
+    const seniorApplication = await tx.application.findFirst({
+      where: {
+        status: { in: seniorityApplicationStatuses },
+        submittedAt: { not: null },
+        preferences: { some: { quarterTypeId: quarter.quarterTypeId } },
+        personnel: { designation: { eligibilityRules: { some: { quarterTypeId: quarter.quarterTypeId, isEligible: true } } } }
+      },
+      select: { id: true, applicationNo: true, isSpecialCase: true, submittedAt: true },
+      orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }, { createdAt: "asc" }]
+    });
+    if (seniorApplication && seniorApplication.id !== current.id) {
+      throw new ApiError(409, `Allotment must follow seniority. ${seniorApplication.applicationNo} has priority for this quarter type.`);
+    }
     const previousOccupancy = await tx.occupancyRecord.findFirst({ where: { personnelId: current.personnelId, isCurrent: true } });
     if (current.applicationType === ApplicationType.TRANSFER_CHANGE && previousOccupancy) {
       await tx.occupancyRecord.update({ where: { id: previousOccupancy.id }, data: { isCurrent: false, vacatedDate: input.allotmentDate, closedById: req.auth!.id } });
@@ -417,6 +600,8 @@ router.get("/applications/:id/allotment-order/pdf", asyncHandler(async (req, res
     `Order No: ${a.allotmentOrderNo}`, `Date: ${a.createdAt.toLocaleDateString()}`,
     `Applicant: ${application.personnel.fullName} (${application.personnel.designation.name})`,
     `Index / Buckle No: ${application.personnel.indexNumber} / ${application.personnel.buckleNumber}`,
+    `Service Join Date: ${application.personnel.serviceJoinDate?.toLocaleDateString() ?? "Not recorded"}`,
+    `Last Posting Outside Rajkot: ${application.personnel.lastPostingOutsideRajkot ?? "Not applicable"}`,
     `Posting: ${application.personnel.currentPoliceUnit.name}`,
     `Quarter: ${a.quarter.area.name} - ${a.quarter.quarterType.name} - ${a.quarter.houseNumber}`,
     `Allotment Date: ${a.allotmentDate.toLocaleDateString()}`,
@@ -432,6 +617,9 @@ router.get("/applications/:id/acknowledgement/pdf", asyncHandler(async (req, res
   if (req.auth!.role === UserRole.VIEWER) throw new ApiError(403, "Viewer cannot download protected documents");
   renderDocument(res, "Quarter Application Acknowledgement", [
     `Application No: ${application.applicationNo}`, `Applicant: ${application.personnel.fullName}`,
+    `Index / Buckle No: ${application.personnel.indexNumber} / ${application.personnel.buckleNumber}`,
+    `Service Join Date: ${application.personnel.serviceJoinDate?.toLocaleDateString() ?? "Not recorded"}`,
+    `Last Posting Outside Rajkot: ${application.personnel.lastPostingOutsideRajkot ?? "Not applicable"}`,
     `Application Type: ${application.applicationType}`, `Status: ${application.status}`,
     `Submitted Date: ${application.submittedAt?.toLocaleDateString() ?? "Draft"}`
   ], `${application.applicationNo}-acknowledgement.pdf`);

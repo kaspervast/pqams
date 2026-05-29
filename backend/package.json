@@ -9,6 +9,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:dummy": "tsx prisma/seed-dummy-inventory.ts",
+    "db:seed:applications": "tsx prisma/seed-dummy-applications.ts",
     "test": "vitest run"
   },
   "prisma": {

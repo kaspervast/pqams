@@ -20,7 +20,7 @@ const navigation: NavigationItem[] = [
   { label: "Dashboard", path: "/" },
   { label: "Applications", path: "/applications" },
   { label: "Quarter Inventory", path: "/quarters" },
-  { label: "Personnel", path: "/personnel", roles: ["ADMIN", "CORRESPONDENCE_BRANCH", "UNIT_USER", "SUPER_ADMIN", "VIEWER"] },
+  { label: "Personnel", path: "/personnel", roles: ["CORRESPONDENCE_BRANCH", "SUPER_ADMIN", "VIEWER"] },
   { label: "Reports", path: "/reports" },
   { label: "Users", path: "/users", roles: ["ADMIN"] },
   { label: "Master Data", path: "/masters", roles: ["ADMIN"] },
@@ -90,7 +90,7 @@ export default function App() {
       <Route path="/" element={<DashboardPage />} />
       <Route path="/applications" element={<ApplicationsPage />} />
       <Route path="/quarters" element={<QuartersPage />} />
-      <Route path="/personnel" element={<PersonnelPage />} />
+      <Route path="/personnel" element={<Guard roles={["ADMIN", "CORRESPONDENCE_BRANCH", "SUPER_ADMIN", "VIEWER"]}><PersonnelPage /></Guard>} />
       <Route path="/reports" element={<ReportsPage />} />
       <Route path="/users" element={<Guard roles={["ADMIN"]}><UsersPage /></Guard>} />
       <Route path="/masters" element={<Guard roles={["ADMIN"]}><MastersPage /></Guard>} />

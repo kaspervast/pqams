@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApplicationStatus } from "@prisma/client";
 import { ApiError } from "../src/lib/http.js";
-import { activeApplicationStatuses, canReadApplication, ensureTransition } from "../src/services/workflow.js";
+import { activeApplicationStatuses, canReadApplication, ensureTransition, seniorityApplicationStatuses } from "../src/services/workflow.js";
 
 describe("application workflow rules", () => {
   it("permits only defined review and allotment transitions", () => {
@@ -18,6 +18,12 @@ describe("application workflow rules", () => {
   it("retains returned applications in active duplicate prevention scope", () => {
     expect(activeApplicationStatuses).toContain(ApplicationStatus.RETURNED_FOR_RECONSIDERATION);
     expect(activeApplicationStatuses).not.toContain(ApplicationStatus.CLOSED);
+  });
+
+  it("tracks submitted and returned applications in seniority but excludes drafts", () => {
+    expect(seniorityApplicationStatuses).toContain(ApplicationStatus.ADMIN_REVIEW);
+    expect(seniorityApplicationStatuses).toContain(ApplicationStatus.RETURNED_FOR_RECONSIDERATION);
+    expect(seniorityApplicationStatuses).not.toContain(ApplicationStatus.DRAFT);
   });
 
   it("limits unit users to their own unit applications", () => {

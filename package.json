@@ -11,6 +11,8 @@
     "start": "npm run start --workspace backend",
     "db:migrate": "npm run db:migrate --workspace backend",
     "db:seed": "npm run db:seed --workspace backend",
+    "db:seed:dummy": "npm run db:seed:dummy --workspace backend",
+    "db:seed:applications": "npm run db:seed:applications --workspace backend",
     "test": "npm run test --workspace backend && npm run test --workspace frontend"
   },
   "devDependencies": {

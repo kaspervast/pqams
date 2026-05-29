@@ -81,7 +81,7 @@ async function main() {
   for (const name of quarterTypeNames) {
     await prisma.quarterType.upsert({ where: { name }, update: {}, create: { name } });
   }
-  for (const name of ["Police Headquarter", "Ramnath Para", "Mounted Police Line"]) {
+  for (const name of ["Police Headquarter", "Char Maliya", "Ramnath Para", "Mounted Police Line"]) {
     await prisma.area.upsert({ where: { name }, update: {}, create: { name } });
   }
 
@@ -92,7 +92,7 @@ async function main() {
     PC: ["1 BHK"],
     HC: ["1 BHK", "2 BHK"],
     ASI: ["1 BHK", "2 BHK"],
-    PSI: ["1 BHK", "2 BHK"],
+    PSI: ["1 BHK", "2 BHK", "3 BHK"],
     PI: ["1 BHK", "2 BHK", "3 BHK"],
     ACP: ["1 BHK", "2 BHK"]
   };

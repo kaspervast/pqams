@@ -49,7 +49,8 @@ frontend.
 - Master data for police units/stations, designations, quarter types, areas,
   and rank-wise eligibility rules.
 - User administration with activation controls and administrator password reset.
-- Personnel records linked to rank and current posting unit.
+- Applicant profiles automatically created from Unit User applications and linked
+  to rank and current posting unit for occupancy/history tracking.
 - Quarter inventory and status history, including existing occupancy recording.
 - Correspondence-originated inventory changes routed to Admin approval.
 - CSV/XLSX quarter import, including occupied inventory records.
@@ -67,7 +68,7 @@ frontend.
 | `ADMIN` | Users, master data, eligibility, quarter administration, duplicate/Admin review, approval of Correspondence inventory requests, audit and exports |
 | `CORRESPONDENCE_BRANCH` | Inventory entry/change requests, occupancy verification workflow, application verification, reports and exports |
 | `SUPER_ADMIN` | Final application decision, waitlist, final quarter allotment, allotment documents, audit and exports |
-| `UNIT_USER` | Personnel for own unit, draft application submission, attachment upload, application tracking, own-unit reporting |
+| `UNIT_USER` | Direct applicant entry and application submission, attachment upload, application tracking, own-unit reporting |
 | `VIEWER` | Read-only review queues, audit data, dashboard/report access permitted by endpoints |
 
 Seeded users must change their password after first login. Until that change is
@@ -77,8 +78,13 @@ complete, protected operational routes are blocked.
 
 ### New allotment
 
-1. A `UNIT_USER` creates a `DRAFT` application for personnel in their unit.
-2. The user adds up to three preferences and uploads the mandatory application
+1. A `UNIT_USER` first selects `New Allotment` or `Transfer / Quarter Change`,
+   then enters applicant details, including the official departmental
+   index/service number, service join date, and an optional last posting outside
+   Rajkot. The system creates or reuses the internal personnel profile
+   automatically.
+2. Once the designation is selected, only eligible quarter types are offered.
+   The user adds up to three preferences and uploads the mandatory application
    letter; a special case also requires supporting evidence.
 3. Submission checks eligibility, active occupancy/application conflicts, and
    possible duplicate records.
@@ -88,7 +94,13 @@ complete, protected operational routes are blocked.
    `CORRESPONDENCE_REVIEW`.
 6. Correspondence verifies and forwards to `SUPER_ADMIN_REVIEW`.
 7. Super Admin may return, reject, waitlist, or approve pending allotment.
-8. Allotment selects an available approved quarter, creates current occupancy,
+8. Allotment follows seniority for the selected eligible quarter type: special
+   cases are prioritised, then applications are served by their original
+   submission time. Resubmission after correction retains that time.
+9. Admin may decline special-case priority without rejecting the housing
+   application. Such a request continues in regular seniority from its original
+   submission time, with the decision retained in history and audit records.
+10. Allotment selects an available approved quarter, creates current occupancy,
    marks the quarter occupied, records history, and closes the application.
 
 ### Transfer/change allotment
@@ -158,6 +170,8 @@ If it already exists, PostgreSQL reports that fact and you can proceed.
 ```bash
 npm run db:migrate
 npm run db:seed
+npm run db:seed:dummy
+npm run db:seed:applications
 ```
 
 ### Run in development mode
@@ -204,7 +218,7 @@ Running `npm run db:seed` safely upserts:
 - Rajkot police stations, branches, and headquarters master units.
 - Designations: `LR`, `PC`, `HC`, `ASI`, `PSI`, `PI`, `ACP`.
 - Quarter types: `1 BHK`, `2 BHK`, `3 BHK`.
-- Areas: `Police Headquarter`, `Ramnath Para`, `Mounted Police Line`.
+- Areas: `Police Headquarter`, `Char Maliya`, `Ramnath Para`, `Mounted Police Line`.
 - Eligibility rules for each designation and quarter type.
 - Bootstrap user accounts.
 
@@ -229,11 +243,54 @@ login.
 | PC | Eligible | Not eligible | Not eligible |
 | HC | Eligible | Eligible | Not eligible |
 | ASI | Eligible | Eligible | Not eligible |
-| PSI | Eligible | Eligible | Not eligible |
+| PSI | Eligible | Eligible | Eligible |
 | PI | Eligible | Eligible | Eligible |
 | ACP | Eligible | Eligible | Not eligible |
 
 Admin may edit eligibility rules from Master Data after deployment.
+
+### Dummy inventory for workflow testing
+
+Run `npm run db:seed:dummy` after the baseline seed to create detailed test
+quarters and legacy occupied residents. The script uses the existing active
+police units for resident postings and skips quarter codes that already exist,
+so rerunning it does not reset quarter statuses changed through testing.
+
+| Property | Area | Type | Layout | Total | Occupied | Available |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| C7-C9 Officer Quarters | Police Headquarter | 3 BHK | 3 blocks x 10 floors x 4 | 120 | 84 | 36 |
+| Char Maliya | Char Maliya | 2 BHK | 16 blocks x 4 floors x 4 | 256 | 205 | 51 |
+| Maruti Nagar | Police Headquarter | 2 BHK | 20 blocks x 4 floors x 4 | 320 | 230 | 90 |
+| Ramnath Para | Ramnath Para | 2 BHK | 7 blocks x 4 floors x 4 | 112 | 45 | 67 |
+| Mounted Police Line Officer | Mounted Police Line | 3 BHK | B1-B2 x 10 floors x 4 | 80 | 48 | 32 |
+| Mounted Police Line General | Mounted Police Line | 2 BHK | B3-B6 x 10 floors x 4 | 160 | 78 | 82 |
+| **Total** | | | | **1,048** | **690** | **358** |
+
+The `3 BHK` test inventory represents officer quarters; its eligibility is
+restricted to `PSI` and `PI`. Percentage occupancies are rounded to the nearest
+whole quarter where required.
+
+### Dummy applications for seniority testing
+
+Run `npm run db:seed:applications` after `npm run db:seed:dummy`. It creates a
+stable pseudo-random set of `2` to `5` submitted applicants for each active
+police unit. Each applicant requests only a quarter type eligible for their
+designation and present in the seeded available inventory.
+
+- Generated application numbers use `DAPP-2026-####`.
+- Every generated application contains a downloadable dummy application-letter
+  PDF; seeded special cases also contain a supporting PDF.
+- Applications begin at `ADMIN_REVIEW`, with submitted/validated history
+  recorded, so the approval workflow can be tested from its first human step.
+- Approximately every eleventh generated application is a special case; it
+  receives priority in the seniority list as required by the allocation rule.
+- The command is repeatable and skips existing generated application numbers,
+  preserving status changes made while testing.
+
+For any active unit without an existing Unit User, the command creates a
+corresponding test login: `testunit001`, `testunit002`, and so on, with initial
+password `Test@12345`. The existing `unituser` login continues to serve its
+assigned unit.
 
 ## File Uploads and Import
 
@@ -263,6 +320,11 @@ Resident Mobile Number, Resident Designation, Resident Posting, Allocated Date
 For an `OCCUPIED` row, resident fields and allocated date are required. Admin
 imports are applied immediately. Correspondence imports create a pending
 `quarter_change_requests` entry for Admin approval.
+
+The Quarter Inventory screen provides a `Sample XLSX Format` button beside the
+upload control. It downloads `/api/quarters/import-template.xlsx` with the
+exact headings, valid sample rows, and notes so import files use matching master
+data names and required occupied-resident columns.
 
 ## API Reference
 
@@ -315,7 +377,8 @@ data is explicitly removed through controlled database maintenance.
 
 | Method | Endpoint | Purpose / Role |
 | --- | --- | --- |
-| `GET` | `/api/quarters`, `/api/quarters/available`, `/api/quarters/summary`, `/api/quarters/:id` | Authenticated inventory reads |
+| `GET` | `/api/quarters`, `/api/quarters/available`, `/api/quarters/summary`, `/api/quarters/:id` | Authenticated inventory reads; `/api/quarters?summary=true&page=&pageSize=` returns paged inventory rows |
+| `GET` | `/api/quarters/import-template.xlsx` | Admin/Correspondence XLSX import template with exact headers and sample data |
 | `POST` | `/api/quarters` | Admin direct creation; Correspondence approval request |
 | `PATCH` | `/api/quarters/:id` | Admin direct update; Correspondence approval request |
 | `DELETE` | `/api/quarters/:id` | Admin deactivation |
@@ -331,8 +394,9 @@ data is explicitly removed through controlled database maintenance.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET/POST` | `/api/personnel` | List/create records |
-| `GET/PATCH/DELETE` | `/api/personnel/:id` | Detail, update, or Admin deactivate |
+| `GET/POST` | `/api/personnel` | List records; `summary=true&page=&pageSize=&q=` provides paged lightweight results; Admin maintenance creation |
+| `GET` | `/api/personnel/options` | Lightweight active-personnel options for occupancy selection |
+| `GET/PATCH/DELETE` | `/api/personnel/:id` | Detail; Admin update/deactivation |
 | `GET` | `/api/personnel/search-duplicate` | Search potential duplicate personnel |
 | `GET` | `/api/personnel/by-index/:indexNumber` | Locate by index number |
 | `GET` | `/api/personnel/by-buckle/:buckleNumber` | Locate by buckle number |
@@ -343,7 +407,7 @@ data is explicitly removed through controlled database maintenance.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET/POST` | `/api/applications` | Search or create Unit User draft |
+| `GET/POST` | `/api/applications` | Search or create Unit User draft; creation accepts applicant details and internally creates/reuses personnel |
 | `GET/PATCH` | `/api/applications/:id` | Read or edit permitted draft/returned record |
 | `POST` | `/api/applications/:id/submit` | Validate and submit draft |
 | `POST` | `/api/applications/:id/resubmit` | Resubmit returned application |
@@ -355,6 +419,7 @@ data is explicitly removed through controlled database maintenance.
 | `PATCH` | `/api/attachments/:id/verify` | Admin/Correspondence document verification |
 | `DELETE` | `/api/attachments/:id` | Remove permitted pre-submission attachment |
 | `POST` | `/api/applications/:id/admin-review` | Admin decision |
+| `POST` | `/api/applications/:id/special-case/reject` | Admin declines special priority while retaining the request in regular seniority |
 | `POST` | `/api/applications/:id/correspondence-review` | Correspondence verification decision |
 | `POST` | `/api/applications/:id/super-admin/return` | Super Admin return |
 | `POST` | `/api/applications/:id/super-admin/reject` | Super Admin rejection |
@@ -374,7 +439,7 @@ data is explicitly removed through controlled database maintenance.
 | `GET` | `/api/dashboard/admin` | Admin metrics and queue |
 | `GET` | `/api/dashboard/correspondence` | Correspondence metrics and queue |
 | `GET` | `/api/dashboard/super-admin` | Super Admin and Viewer metrics |
-| `GET` | `/api/dashboard/unit` | Unit User unit-scoped metrics |
+| `GET` | `/api/dashboard/unit` | Unit User metrics and unit applicants' overall and quarter-type seniority positions |
 | `GET` | `/api/reports/:reportType` | Authorized report data |
 | `GET` | `/api/reports/export/:reportType?format=csv|excel|pdf` | Operational-role export |
 
@@ -429,7 +494,7 @@ users -> quarter_change_requests -> quarters
 | `application_status` | `DRAFT`, `SUBMITTED`, `DUPLICATE_REVIEW`, `ADMIN_REVIEW`, `CORRESPONDENCE_REVIEW`, `SUPER_ADMIN_REVIEW`, `RETURNED_FOR_RECONSIDERATION`, `APPROVED_WAITLIST`, `APPROVED_PENDING_ALLOTMENT`, `ALLOTTED`, `REJECTED`, `CANCELLED`, `CLOSED` |
 | `urgency_category` | `MEDICAL`, `DISABILITY`, `WIDOW_COMPASSIONATE`, `DISTANCE_FROM_POSTING`, `FAMILY_SAFETY`, `LAW_AND_ORDER_SENSITIVITY`, `GOVERNMENT_DUTY_URGENCY`, `EXISTING_QUARTER_UNSAFE`, `OTHER` |
 | `attachment_type` | `APPLICATION_LETTER`, `SPECIAL_CASE_DOCUMENT`, `ID_PROOF`, `CURRENT_QUARTER_DOCUMENT`, `OTHER` |
-| `approval_action` | `SUBMITTED`, `VERIFIED`, `RETURNED`, `REJECTED`, `APPROVED_WAITLIST`, `APPROVED_PENDING_ALLOTMENT`, `ALLOTTED`, `CANCELLED`, `CLOSED` |
+| `approval_action` | `SUBMITTED`, `VERIFIED`, `SPECIAL_CASE_REJECTED`, `RETURNED`, `REJECTED`, `APPROVED_WAITLIST`, `APPROVED_PENDING_ALLOTMENT`, `ALLOTTED`, `CANCELLED`, `CLOSED` |
 | `duplicate_match_strength` | `LOW`, `MEDIUM`, `HIGH`, `EXACT` |
 | `change_request_type` | `CREATE_QUARTER`, `UPDATE_QUARTER`, `STATUS_CHANGE`, `BULK_IMPORT` |
 | `change_request_status` | `PENDING`, `APPROVED`, `REJECTED` |
@@ -563,6 +628,8 @@ Police personnel for whom applications and occupancy are recorded.
 | `designation_id` | UUID | FK -> `designations.id` |
 | `current_police_unit_id` | UUID | FK -> `police_units.id` |
 | `current_address` | TEXT | Residential/current address |
+| `service_join_date` | DATE | NULL for historical/imported rows; required during new application intake |
+| `last_posting_outside_rajkot` | VARCHAR(200) | NULL, applicant's last outside-Rajkot posting |
 | `is_active` | BOOLEAN | Defaults `true` |
 | `created_by`, `updated_by` | UUID | NULL, FK -> `users.id` |
 | `created_at`, `updated_at` | TIMESTAMP | Lifecycle timestamps |
@@ -844,6 +911,8 @@ Approval queue for Correspondence-originated inventory modifications.
 | `npm start` | Run the compiled backend, serving built frontend in production mode |
 | `npm run db:migrate` | Apply Prisma database migrations |
 | `npm run db:seed` | Upsert master data and bootstrap users |
+| `npm run db:seed:dummy` | Create repeatable dummy quarter inventory and occupied residents for workflow testing |
+| `npm run db:seed:applications` | Create repeatable eligible applications and unit logins for seniority/workflow testing |
 | `npm test` | Run backend and frontend configured tests |
 
 Current automated backend tests cover workflow helpers and role-scoping rules.

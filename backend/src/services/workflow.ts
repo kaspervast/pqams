@@ -50,6 +50,10 @@ export const activeApplicationStatuses: ApplicationStatus[] = [
   ApplicationStatus.APPROVED_PENDING_ALLOTMENT
 ];
 
+export const seniorityApplicationStatuses: ApplicationStatus[] = activeApplicationStatuses.filter(
+  (status) => status !== ApplicationStatus.DRAFT
+);
+
 export function canReadApplication(role: UserRole, userUnitId: string | null, applicationUnitId: string) {
   return role !== "UNIT_USER" || userUnitId === applicationUnitId;
 }

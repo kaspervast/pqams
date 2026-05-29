@@ -7,6 +7,7 @@ import { prisma } from "../prisma.js";
 import { audit } from "../lib/activity.js";
 import { ApiError, asyncHandler, ok, pathParam } from "../lib/http.js";
 import { allow, authenticate, requireChangedPassword } from "../middleware/auth.js";
+import { seniorityApplicationStatuses } from "../services/workflow.js";
 
 const router = Router();
 router.use(authenticate, requireChangedPassword);
@@ -72,11 +73,36 @@ router.get("/dashboard/correspondence", allow(UserRole.CORRESPONDENCE_BRANCH), a
 }));
 router.get("/dashboard/unit", allow(UserRole.UNIT_USER), asyncHandler(async (req, res) => {
   const unitId = req.auth!.policeUnitId!;
-  const [counts, queue] = await Promise.all([
+  const [counts, seniorityQueue] = await Promise.all([
     applicationCounts(unitId),
-    prisma.application.findMany({ where: { submittedByUnitId: unitId }, include: { personnel: true }, orderBy: { createdAt: "desc" }, take: 8 })
+    prisma.application.findMany({
+      where: { status: { in: seniorityApplicationStatuses }, submittedAt: { not: null } },
+      include: { personnel: true, preferences: { include: { quarterType: true }, orderBy: { preferenceOrder: "asc" } } },
+      orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }, { createdAt: "asc" }]
+    })
   ]);
-  return ok(res, { ...counts, queue });
+  const caseCounters = new Map<string, number>();
+  const typeCounters = new Map<string, number>();
+  const typeCaseCounters = new Map<string, number>();
+  const seniority = seniorityQueue
+    .map((application, index) => {
+      const caseType = application.isSpecialCase ? "SPECIAL" : "REGULAR";
+      const caseLabel = application.isSpecialCase ? "Special Case" : "Regular";
+      const casePosition = (caseCounters.get(caseType) ?? 0) + 1;
+      caseCounters.set(caseType, casePosition);
+      const typeSeniority = [...new Map(application.preferences.map((preference) => [preference.quarterTypeId, preference.quarterType.name])).entries()]
+        .map(([quarterTypeId, quarterType]) => {
+          const position = (typeCounters.get(quarterTypeId) ?? 0) + 1;
+          const typeCaseKey = `${quarterTypeId}:${caseType}`;
+          const typeCasePosition = (typeCaseCounters.get(typeCaseKey) ?? 0) + 1;
+          typeCounters.set(quarterTypeId, position);
+          typeCaseCounters.set(typeCaseKey, typeCasePosition);
+          return { quarterType, position, casePosition: typeCasePosition, caseLabel };
+        });
+      return { ...application, seniorityPosition: index + 1, casePosition, caseType, caseLabel, typeSeniority };
+    })
+    .filter((application) => application.submittedByUnitId === unitId);
+  return ok(res, { ...counts, seniorityTotal: seniorityQueue.length, seniority });
 }));
 
 type Row = Record<string, string | number | boolean | Date | null | undefined>;

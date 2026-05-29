@@ -90,6 +90,7 @@ enum AttachmentType {
 enum ApprovalAction {
   SUBMITTED
   VERIFIED
+  SPECIAL_CASE_REJECTED
   RETURNED
   REJECTED
   APPROVED_WAITLIST
@@ -278,27 +279,29 @@ model Quarter {
 }
 
 model Personnel {
-  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  indexNumber         String            @unique @map("index_number") @db.VarChar(80)
-  buckleNumber        String            @unique @map("buckle_number") @db.VarChar(80)
-  fullName            String            @map("full_name") @db.VarChar(150)
-  mobileNumber        String            @map("mobile_number") @db.VarChar(20)
-  designationId       String            @map("designation_id") @db.Uuid
-  currentPoliceUnitId String            @map("current_police_unit_id") @db.Uuid
-  currentAddress      String            @map("current_address")
-  isActive            Boolean           @default(true) @map("is_active")
-  createdById         String?           @map("created_by") @db.Uuid
-  updatedById         String?           @map("updated_by") @db.Uuid
-  createdAt           DateTime          @default(now()) @map("created_at")
-  updatedAt           DateTime          @updatedAt @map("updated_at")
-  designation         Designation       @relation(fields: [designationId], references: [id])
-  currentPoliceUnit   PoliceUnit        @relation(fields: [currentPoliceUnitId], references: [id])
-  createdBy           User?             @relation("PersonnelCreatedBy", fields: [createdById], references: [id])
-  updatedBy           User?             @relation("PersonnelUpdatedBy", fields: [updatedById], references: [id])
-  occupancies         OccupancyRecord[]
-  applications        Application[]
-  allotments          Allotment[]
-  duplicateMatches    DuplicateCheck[]  @relation("MatchedPersonnel")
+  id                       String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indexNumber              String            @unique @map("index_number") @db.VarChar(80)
+  buckleNumber             String            @unique @map("buckle_number") @db.VarChar(80)
+  fullName                 String            @map("full_name") @db.VarChar(150)
+  mobileNumber             String            @map("mobile_number") @db.VarChar(20)
+  designationId            String            @map("designation_id") @db.Uuid
+  currentPoliceUnitId      String            @map("current_police_unit_id") @db.Uuid
+  currentAddress           String            @map("current_address")
+  serviceJoinDate          DateTime?         @map("service_join_date") @db.Date
+  lastPostingOutsideRajkot String?           @map("last_posting_outside_rajkot") @db.VarChar(200)
+  isActive                 Boolean           @default(true) @map("is_active")
+  createdById              String?           @map("created_by") @db.Uuid
+  updatedById              String?           @map("updated_by") @db.Uuid
+  createdAt                DateTime          @default(now()) @map("created_at")
+  updatedAt                DateTime          @updatedAt @map("updated_at")
+  designation              Designation       @relation(fields: [designationId], references: [id])
+  currentPoliceUnit        PoliceUnit        @relation(fields: [currentPoliceUnitId], references: [id])
+  createdBy                User?             @relation("PersonnelCreatedBy", fields: [createdById], references: [id])
+  updatedBy                User?             @relation("PersonnelUpdatedBy", fields: [updatedById], references: [id])
+  occupancies              OccupancyRecord[]
+  applications             Application[]
+  allotments               Allotment[]
+  duplicateMatches         DuplicateCheck[]  @relation("MatchedPersonnel")
 
   @@index([fullName, mobileNumber])
   @@map("personnel")

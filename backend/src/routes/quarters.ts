@@ -43,19 +43,37 @@ router.get("/quarters", asyncHandler(async (req, res) => {
     quarterTypeId: z.string().uuid().optional(),
     status: z.nativeEnum(QuarterStatus).optional(),
     houseNumber: z.string().optional(),
-    availableOnly: z.enum(["true", "false"]).optional()
+    availableOnly: z.enum(["true", "false"]).optional(),
+    summary: z.enum(["true", "false"]).optional(),
+    page: z.coerce.number().int().positive().default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(50)
   }).parse(req.query);
   const status = filters.availableOnly === "true" ? QuarterStatus.AVAILABLE : filters.status;
+  const where = {
+    areaId: filters.areaId,
+    quarterTypeId: filters.quarterTypeId,
+    status,
+    houseNumber: filters.houseNumber ? { contains: filters.houseNumber, mode: "insensitive" as const } : undefined,
+    isActive: true
+  };
+  const orderBy = [{ area: { name: "asc" as const } }, { houseNumber: "asc" as const }];
+  if (filters.summary === "true") {
+    const [rows, total] = await Promise.all([
+      prisma.quarter.findMany({
+        where,
+        include: quarterInclude,
+        orderBy,
+        skip: (filters.page - 1) * filters.pageSize,
+        take: filters.pageSize
+      }),
+      prisma.quarter.count({ where })
+    ]);
+    return ok(res, { rows, total, page: filters.page, pageSize: filters.pageSize, totalPages: Math.max(1, Math.ceil(total / filters.pageSize)) });
+  }
   const quarters = await prisma.quarter.findMany({
-    where: {
-      areaId: filters.areaId,
-      quarterTypeId: filters.quarterTypeId,
-      status,
-      houseNumber: filters.houseNumber ? { contains: filters.houseNumber, mode: "insensitive" } : undefined,
-      isActive: true
-    },
+    where,
     include: quarterInclude,
-    orderBy: [{ area: { name: "asc" } }, { houseNumber: "asc" }]
+    orderBy
   });
   return ok(res, quarters);
 }));
@@ -69,6 +87,44 @@ router.get("/quarters/available", asyncHandler(async (req, res) => {
 router.get("/quarters/summary", asyncHandler(async (_req, res) => {
   const grouped = await prisma.quarter.groupBy({ by: ["status"], _count: true, where: { isActive: true } });
   return ok(res, grouped);
+}));
+router.get("/quarters/import-template.xlsx", allow(UserRole.ADMIN, UserRole.CORRESPONDENCE_BRANCH), asyncHandler(async (_req, res) => {
+  const [area, quarterType, designation, policeUnit] = await Promise.all([
+    prisma.area.findFirst({ where: { isActive: true }, orderBy: { name: "asc" } }),
+    prisma.quarterType.findFirst({ where: { isActive: true }, orderBy: { name: "asc" } }),
+    prisma.designation.findFirst({ where: { isActive: true }, orderBy: { code: "asc" } }),
+    prisma.policeUnit.findFirst({ where: { isActive: true }, orderBy: { name: "asc" } })
+  ]);
+  const headers = [
+    "Area", "Quarter Type", "House Number", "Wing", "Block", "Floor", "Status",
+    "Condition Remarks", "Electricity Meter No", "Water Connection No",
+    "Resident Index Number", "Resident Buckle Number", "Resident Name", "Resident Mobile Number",
+    "Resident Designation", "Resident Posting", "Allocated Date"
+  ];
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "PQAMS";
+  const sheet = workbook.addWorksheet("Quarter Import");
+  sheet.addRow(headers);
+  sheet.addRow([area?.name ?? "Police Headquarter", quarterType?.name ?? "2 BHK", "SAMPLE-A-101", "A", "A1", "1", "AVAILABLE", "Good", "MTR-001", "WTR-001"]);
+  sheet.addRow([
+    area?.name ?? "Police Headquarter", quarterType?.name ?? "2 BHK", "SAMPLE-A-102", "A", "A1", "1", "OCCUPIED",
+    "Good", "MTR-002", "WTR-002", "SAMPLE-IDX-001", "SAMPLE-BKL-001", "Sample Resident", "9999999999",
+    designation?.code ?? "PC", policeUnit?.name ?? "Police Headquarter", "2026-05-29"
+  ]);
+  sheet.getRow(1).font = { bold: true };
+  sheet.columns = headers.map((header) => ({ header, key: header, width: Math.max(18, header.length + 2) }));
+  const notes = workbook.addWorksheet("Instructions");
+  notes.addRows([
+    ["Use the exact header names from the Quarter Import sheet."],
+    ["Status may be AVAILABLE, UNDER_REPAIR, RESERVED, VACATED_PENDING_INSPECTION, DISPUTED, or OCCUPIED."],
+    ["If Status is OCCUPIED, all Resident fields and Allocated Date are mandatory."],
+    ["Area, Quarter Type, Resident Designation, and Resident Posting must already exist in master data."],
+    ["Allocated Date should use YYYY-MM-DD format."]
+  ]);
+  const buffer = await workbook.xlsx.writeBuffer();
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", 'attachment; filename="quarter-import-template.xlsx"');
+  return res.send(Buffer.from(buffer));
 }));
 router.get("/quarters/:id", asyncHandler(async (req, res) => {
   const quarter = await prisma.quarter.findUnique({ where: { id: pathParam(req) }, include: { ...quarterInclude, statusHistory: true } });

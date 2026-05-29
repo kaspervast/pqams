@@ -16,7 +16,9 @@ const inputSchema = z.object({
   mobileNumber: z.string().trim().min(10),
   designationId: z.string().uuid(),
   currentPoliceUnitId: z.string().uuid(),
-  currentAddress: z.string().trim().min(5)
+  currentAddress: z.string().trim().min(5),
+  serviceJoinDate: z.coerce.date().optional().nullable(),
+  lastPostingOutsideRajkot: z.string().trim().max(200).optional().nullable()
 });
 const include = {
   designation: true,
@@ -24,27 +26,67 @@ const include = {
   occupancies: { where: { isCurrent: true }, include: { quarter: { include: { area: true, quarterType: true } } } },
   applications: { orderBy: { createdAt: "desc" as const }, take: 5 }
 };
+const summarySelect = {
+  id: true,
+  indexNumber: true,
+  buckleNumber: true,
+  fullName: true,
+  mobileNumber: true,
+  designationId: true,
+  currentPoliceUnitId: true,
+  currentAddress: true,
+  serviceJoinDate: true,
+  lastPostingOutsideRajkot: true,
+  isActive: true,
+  designation: { select: { code: true, name: true } },
+  currentPoliceUnit: { select: { name: true } },
+  occupancies: {
+    where: { isCurrent: true },
+    take: 1,
+    select: { quarter: { select: { houseNumber: true, fullQuarterCode: true } } }
+  }
+};
 
 router.get("/personnel", asyncHandler(async (req, res) => {
-  const q = typeof req.query.q === "string" ? req.query.q : undefined;
+  const query = z.object({
+    q: z.string().trim().optional(),
+    summary: z.enum(["true", "false"]).optional(),
+    page: z.coerce.number().int().positive().default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(50)
+  }).parse(req.query);
   const where = req.auth!.role === UserRole.UNIT_USER ? { currentPoliceUnitId: req.auth!.policeUnitId! } : {};
+  const filters = {
+    ...where,
+    OR: query.q ? [{ fullName: { contains: query.q, mode: "insensitive" as const } }, { indexNumber: { contains: query.q } }, { buckleNumber: { contains: query.q } }] : undefined
+  };
+  if (query.summary === "true") {
+    const [rows, total] = await Promise.all([
+      prisma.personnel.findMany({
+        where: filters,
+        select: summarySelect,
+        orderBy: { fullName: "asc" },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize
+      }),
+      prisma.personnel.count({ where: filters })
+    ]);
+    return ok(res, { rows, total, page: query.page, pageSize: query.pageSize, totalPages: Math.max(1, Math.ceil(total / query.pageSize)) });
+  }
   return ok(res, await prisma.personnel.findMany({
-    where: { ...where, OR: q ? [{ fullName: { contains: q, mode: "insensitive" } }, { indexNumber: { contains: q } }, { buckleNumber: { contains: q } }] : undefined },
+    where: filters,
     include,
     orderBy: { fullName: "asc" }
   }));
 }));
-router.post("/personnel", allow(UserRole.ADMIN, UserRole.UNIT_USER), asyncHandler(async (req, res) => {
+router.post("/personnel", allow(UserRole.ADMIN), asyncHandler(async (req, res) => {
   const input = inputSchema.parse(req.body);
-  if (req.auth!.role === UserRole.UNIT_USER && input.currentPoliceUnitId !== req.auth!.policeUnitId) throw new ApiError(403, "Personnel must belong to your unit");
   const value = await prisma.personnel.create({ data: { ...input, createdById: req.auth!.id }, include });
   await audit(req, { action: "PERSONNEL_CREATE", entityType: "PERSONNEL", entityId: value.id, newValue: input });
   return ok(res, value, "Personnel created", 201);
 }));
-router.patch("/personnel/:id", allow(UserRole.ADMIN, UserRole.UNIT_USER), asyncHandler(async (req, res) => {
+router.patch("/personnel/:id", allow(UserRole.ADMIN), asyncHandler(async (req, res) => {
   const input = inputSchema.partial().parse(req.body);
   const existing = await prisma.personnel.findUniqueOrThrow({ where: { id: pathParam(req) } });
-  if (req.auth!.role === UserRole.UNIT_USER && existing.currentPoliceUnitId !== req.auth!.policeUnitId) throw new ApiError(403, "Not authorized for this personnel record");
   const value = await prisma.personnel.update({ where: { id: existing.id }, data: { ...input, updatedById: req.auth!.id }, include });
   await audit(req, { action: "PERSONNEL_UPDATE", entityType: "PERSONNEL", entityId: value.id, oldValue: existing, newValue: input });
   return ok(res, value, "Personnel updated");
@@ -83,6 +125,13 @@ router.get("/personnel/search-duplicate", asyncHandler(async (req, res) => {
     activeApplication: person.applications.find((application) => activeApplicationStatuses.includes(application.status)) ?? null,
     previousApplications: person.applications.filter((application) => !activeApplicationStatuses.includes(application.status))
   })));
+}));
+router.get("/personnel/options", allow(UserRole.ADMIN), asyncHandler(async (_req, res) => {
+  return ok(res, await prisma.personnel.findMany({
+    where: { isActive: true },
+    select: { id: true, fullName: true, buckleNumber: true, indexNumber: true },
+    orderBy: { fullName: "asc" }
+  }));
 }));
 router.get("/personnel/by-index/:indexNumber", asyncHandler(async (req, res) => {
   const value = await prisma.personnel.findUnique({ where: { indexNumber: pathParam(req, "indexNumber") }, include });

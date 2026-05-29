@@ -1,8 +1,8 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
-  Divider, FormControlLabel, Grid, IconButton, MenuItem, Paper, Stack, Switch, Table, TableBody, TableCell,
+  Divider, FormControlLabel, Grid, IconButton, LinearProgress, MenuItem, Paper, Stack, Switch, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, Typography
 } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -35,14 +35,21 @@ function Page({ title, actions, children }: { title: string; actions?: ReactNode
     {children}
   </Stack>;
 }
-function DataTable({ columns, rows }: { columns: Array<{ key: string; label: string; render?: (row: AnyRow) => ReactNode }>; rows: AnyRow[] }) {
+function DataTable({ columns, rows, renderBeforeRow }: { columns: Array<{ key: string; label: string; render?: (row: AnyRow) => ReactNode }>; rows: AnyRow[]; renderBeforeRow?: (row: AnyRow) => ReactNode }) {
   return <TableContainer component={Paper} variant="outlined">
     <Table size="small">
       <TableHead><TableRow>{columns.map((column) => <TableCell key={column.key} sx={{ fontWeight: 650 }}>{column.label}</TableCell>)}</TableRow></TableHead>
       <TableBody>
-        {rows.map((row, index) => <TableRow key={row.id ?? index} hover>
-          {columns.map((column) => <TableCell key={column.key}>{column.render ? column.render(row) : String(row[column.key] ?? "-")}</TableCell>)}
-        </TableRow>)}
+        {rows.map((row, index) => {
+          const key = row.id ?? index;
+          const editContent = renderBeforeRow?.(row);
+          return <Fragment key={key}>
+            {editContent && <TableRow><TableCell colSpan={columns.length} sx={{ bgcolor: "action.hover", p: 2 }}>{editContent}</TableCell></TableRow>}
+            <TableRow hover>
+              {columns.map((column) => <TableCell key={column.key}>{column.render ? column.render(row) : String(row[column.key] ?? "-")}</TableCell>)}
+            </TableRow>
+          </Fragment>;
+        })}
         {!rows.length && <TableRow><TableCell colSpan={columns.length}>No records found.</TableCell></TableRow>}
       </TableBody>
     </Table>
@@ -52,6 +59,21 @@ function RowActions({ onEdit, onDelete, deleteDisabled = false }: { onEdit?: () 
   return <Stack direction="row" spacing={0.5}>
     {onEdit && <IconButton size="small" color="primary" aria-label="Edit" onClick={onEdit}><EditOutlinedIcon fontSize="small" /></IconButton>}
     {onDelete && <IconButton size="small" color="error" aria-label="Delete" disabled={deleteDisabled} onClick={onDelete}><DeleteOutlineIcon fontSize="small" /></IconButton>}
+  </Stack>;
+}
+function SeniorityView({ seniority, compact = false }: { seniority?: AnyRow | null; compact?: boolean }) {
+  if (!seniority) return <Typography color="text.secondary">Not in active queue</Typography>;
+  const caseLabel = seniority.caseLabel ?? "Regular";
+  const typeSeniority = seniority.typeSeniority ?? [];
+  return <Stack spacing={0.25}>
+    <Typography fontWeight={650}>Queue Position #{seniority.overallPosition}</Typography>
+    <Typography variant={compact ? "caption" : "body2"} color="text.secondary">{caseLabel} Position #{seniority.casePosition}</Typography>
+    {typeSeniority.map((entry: AnyRow) =>
+      <Typography key={`${entry.quarterTypeId ?? entry.quarterType}-${entry.position}-${entry.casePosition}`} variant={compact ? "caption" : "body2"} color="text.secondary">
+        {entry.quarterType}: Queue #{entry.position} ({entry.caseLabel ?? caseLabel} #{entry.casePosition})
+      </Typography>
+    )}
+    {!compact && <Typography variant="caption" color="text.secondary">#1 is first in line and is served before higher numbers.</Typography>}
   </Stack>;
 }
 
@@ -113,7 +135,8 @@ export function DashboardPage() {
     users: "System Users", units: "Police Units", quarters: "Total Quarters", duplicates: "Duplicate Reviews",
     changes: "Inventory Approvals", specialCases: "Urgent Cases", newRequests: "New Requests",
     transfers: "Transfer Requests", available: "Available Quarters", occupied: "Occupied Quarters",
-    waitlisted: "Waitlisted", aging: "Pending Over 15 Days", verification: "Verification Queue"
+    waitlisted: "Waitlisted", aging: "Pending Over 15 Days", verification: "Verification Queue",
+    seniorityTotal: "Active Seniority Queue"
   };
   const highlight = new Set(["pending", "available", "occupied", "specialCases", "verification", "changes"]);
   const statusRows = Array.isArray(data?.statuses) ? data.statuses : Array.isArray(data?.summary) ? data.summary : [];
@@ -130,6 +153,22 @@ export function DashboardPage() {
         <Typography variant="h3" mt={1} fontWeight={700} color="primary.main">{value}</Typography>
       </CardContent></Card></Grid>)}</Grid>}
     <Grid container spacing={2}>
+      {user?.role === "UNIT_USER" && Array.isArray(data?.seniority) && <Grid size={{ xs: 12 }}><Paper variant="outlined" sx={{ p: 2 }}>
+        <Typography variant="h6" fontWeight={650}>Applicant Queue Position From Your Unit</Typography>
+        <Typography variant="body2" color="text.secondary" mb={2}>Lower number means closer to allotment: #1 is first in line. Special cases are placed before normal applications; normal applications retain their original submitted order.</Typography>
+        <DataTable columns={[
+          { key: "seniorityPosition", label: "Queue Position" },
+          { key: "applicationNo", label: "Application" },
+          { key: "personnel", label: "Applicant", render: (r) => r.personnel.fullName },
+          { key: "priority", label: "Case Type", render: (r) => r.isSpecialCase ? <Chip size="small" color="warning" label="Special Case" /> : "Normal" },
+          { key: "casePosition", label: "Special/Regular Position", render: (r) => `${r.caseLabel} #${r.casePosition}` },
+          { key: "types", label: "Quarter-Type Position", render: (r) => <Stack spacing={0.25}>{r.typeSeniority.map((entry: AnyRow) =>
+            <Typography key={`${entry.quarterType}-${entry.position}-${entry.casePosition}`} variant="body2">{entry.quarterType}: Queue #{entry.position} ({entry.caseLabel} #{entry.casePosition})</Typography>
+          )}</Stack> },
+          { key: "submittedAt", label: "Submitted", render: (r) => r.submittedAt ? new Date(r.submittedAt).toLocaleDateString() : "-" },
+          { key: "status", label: "Status", render: (r) => <Chip size="small" label={r.status.replaceAll("_", " ")} /> }
+        ]} rows={data.seniority} />
+      </Paper></Grid>}
       {data?.queue && <Grid size={{ xs: 12, lg: 8 }}><Paper variant="outlined" sx={{ p: 2 }}>
         <Typography variant="h6" fontWeight={650} mb={2}>Priority Review Queue</Typography>
         <DataTable columns={[
@@ -157,13 +196,16 @@ export function UsersPage() {
   const [form, setForm] = useState({ fullName: "", username: "", password: "Admin@12345", role: "UNIT_USER", policeUnitId: "" });
   const [editing, setEditing] = useState<AnyRow | null>(null);
   const [requestError, setRequestError] = useState<unknown>();
+  const resetForm = () => {
+    setEditing(null);
+    setForm({ fullName: "", username: "", password: "Admin@12345", role: "UNIT_USER", policeUnitId: "" });
+  };
   const save = async () => {
     try {
       const payload = { fullName: form.fullName, username: form.username, role: form.role, policeUnitId: form.policeUnitId || null };
       if (editing) await api.patch(`/users/${editing.id}`, payload);
       else await api.post("/users", { ...payload, password: form.password });
-      setForm({ fullName: "", username: "", password: "Admin@12345", role: "UNIT_USER", policeUnitId: "" });
-      setEditing(null);
+      resetForm();
       await client.invalidateQueries({ queryKey: ["users"] });
     } catch (e) { setRequestError(e); }
   };
@@ -179,25 +221,29 @@ export function UsersPage() {
       await client.invalidateQueries({ queryKey: ["users"] });
     } catch (e) { setRequestError(e); }
   };
+  const userForm = (mode: "create" | "edit") => <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+    <TextField label="Full name" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+    <TextField label="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+    {mode === "create" && <TextField label="Initial password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />}
+    <TextField label="Role" select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roles.map((role) => <MenuItem key={role} value={role}>{role}</MenuItem>)}</TextField>
+    <TextField label="Police unit" select value={form.policeUnitId} onChange={(e) => setForm({ ...form, policeUnitId: e.target.value })} sx={{ minWidth: 190 }}>
+      <MenuItem value="">None</MenuItem>{units.map((u: AnyRow) => <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>)}
+    </TextField>
+    <Button variant="contained" onClick={save}>{mode === "edit" ? "Update" : "Create"}</Button>
+    {mode === "edit" && <Button onClick={resetForm}>Cancel</Button>}
+  </Stack>;
   return <Page title="User Management">
     <ErrorText error={error || requestError} />
-    <Paper variant="outlined" sx={{ p: 2 }}><Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-      <TextField label="Full name" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
-      <TextField label="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-      {!editing && <TextField label="Initial password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />}
-      <TextField label="Role" select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roles.map((role) => <MenuItem key={role} value={role}>{role}</MenuItem>)}</TextField>
-      <TextField label="Police unit" select value={form.policeUnitId} onChange={(e) => setForm({ ...form, policeUnitId: e.target.value })} sx={{ minWidth: 190 }}>
-        <MenuItem value="">None</MenuItem>{units.map((u: AnyRow) => <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>)}
-      </TextField>
-      <Button variant="contained" onClick={save}>{editing ? "Update" : "Create"}</Button>
-      {editing && <Button onClick={() => { setEditing(null); setForm({ fullName: "", username: "", password: "Admin@12345", role: "UNIT_USER", policeUnitId: "" }); }}>Cancel</Button>}
-    </Stack></Paper>
+    {!editing && <Paper variant="outlined" sx={{ p: 2 }}>{userForm("create")}</Paper>}
     <DataTable rows={data} columns={[
       { key: "username", label: "Username" }, { key: "fullName", label: "Name" }, { key: "role", label: "Role" },
       { key: "policeUnit", label: "Unit", render: (r) => r.policeUnit?.name ?? "-" },
       { key: "isActive", label: "Status", render: (r) => <Chip size="small" color={r.isActive ? "success" : "default"} label={r.isActive ? "Active" : "Inactive"} /> },
       { key: "actions", label: "Actions", render: (r) => <RowActions onEdit={() => edit(r)} onDelete={() => toggleStatus(r)} deleteDisabled={!r.isActive || r.id === user?.id} /> }
-    ]} />
+    ]} renderBeforeRow={(row) => editing?.id === row.id ? <Box>
+      <Typography fontWeight={650} mb={1}>Edit user: {row.username}</Typography>
+      {userForm("edit")}
+    </Box> : null} />
   </Page>;
 }
 
@@ -235,31 +281,31 @@ export function MastersPage() {
   const cancelEdit = () => {
     setEditing(null); setName(""); setExtra(""); setUnitForm({ name: "", unitType: "POLICE_STATION", address: "", contactNumber: "" });
   };
+  const masterForm = (mode: "create" | "edit") => tab === "police-units" ? <Grid container spacing={2}>
+    <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth label="Unit / Police Station Name" value={unitForm.name} onChange={(e) => setUnitForm({ ...unitForm, name: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 2.5 }}><TextField fullWidth select label="Unit Type" value={unitForm.unitType} onChange={(e) => setUnitForm({ ...unitForm, unitType: e.target.value })}>
+      {unitTypes.map((type) => <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>)}
+    </TextField></Grid>
+    <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth label="Address / Description" value={unitForm.address} onChange={(e) => setUnitForm({ ...unitForm, address: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 2.5 }}><TextField fullWidth label="Contact Number" value={unitForm.contactNumber} onChange={(e) => setUnitForm({ ...unitForm, contactNumber: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12 }}><Stack direction="row" spacing={1}>
+      <Button variant="contained" onClick={save} disabled={!unitForm.name.trim()}>{mode === "edit" ? "Update Unit" : "Create Unit"}</Button>
+      {mode === "edit" && <Button onClick={cancelEdit}>Cancel</Button>}
+    </Stack></Grid>
+  </Grid> : <Stack direction="row" spacing={2} alignItems="center">
+    <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+    {tab === "designations" && <TextField label="Code" value={extra} onChange={(e) => setExtra(e.target.value)} />}
+    <Button variant="contained" onClick={save}>{mode === "edit" ? "Update" : "Add"}</Button>
+    {mode === "edit" && <Button onClick={cancelEdit}>Cancel</Button>}
+  </Stack>;
   return <Page title="Master Data">
     <Stack direction="row" spacing={1}>{["police-units", "designations", "quarter-types", "areas", "eligibility-rules"].map((value) =>
       <Button key={value} variant={tab === value ? "contained" : "outlined"} onClick={() => { setTab(value); cancelEdit(); }}>{value === "police-units" ? "Police Units / Stations" : value.replaceAll("-", " ")}</Button>)}</Stack>
     <ErrorText error={error || requestError} />
-    {tab === "police-units" && <Paper variant="outlined" sx={{ p: 2 }}>
-      <Typography variant="subtitle1" fontWeight={650} mb={2}>{editing ? "Edit Police Unit / Station" : "Create Police Unit / Station"}</Typography>
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth label="Unit / Police Station Name" value={unitForm.name} onChange={(e) => setUnitForm({ ...unitForm, name: e.target.value })} /></Grid>
-        <Grid size={{ xs: 12, md: 2.5 }}><TextField fullWidth select label="Unit Type" value={unitForm.unitType} onChange={(e) => setUnitForm({ ...unitForm, unitType: e.target.value })}>
-          {unitTypes.map((type) => <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>)}
-        </TextField></Grid>
-        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth label="Address / Description" value={unitForm.address} onChange={(e) => setUnitForm({ ...unitForm, address: e.target.value })} /></Grid>
-        <Grid size={{ xs: 12, md: 2.5 }}><TextField fullWidth label="Contact Number" value={unitForm.contactNumber} onChange={(e) => setUnitForm({ ...unitForm, contactNumber: e.target.value })} /></Grid>
-        <Grid size={{ xs: 12 }}><Stack direction="row" spacing={1}>
-          <Button variant="contained" onClick={save} disabled={!unitForm.name.trim()}>{editing ? "Update Unit" : "Create Unit"}</Button>
-          {editing && <Button onClick={cancelEdit}>Cancel</Button>}
-        </Stack></Grid>
-      </Grid>
+    {tab !== "eligibility-rules" && !editing && <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography variant="subtitle1" fontWeight={650} mb={2}>{tab === "police-units" ? "Create Police Unit / Station" : `Create ${tab.replaceAll("-", " ")}`}</Typography>
+      {masterForm("create")}
     </Paper>}
-    {tab !== "eligibility-rules" && tab !== "police-units" && <Paper variant="outlined" sx={{ p: 2 }}><Stack direction="row" spacing={2}>
-      <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} />
-      {tab === "designations" && <TextField label="Code" value={extra} onChange={(e) => setExtra(e.target.value)} />}
-      <Button variant="contained" onClick={save}>{editing ? "Update" : "Add"}</Button>
-      {editing && <Button onClick={cancelEdit}>Cancel</Button>}
-    </Stack></Paper>}
     {tab === "eligibility-rules" ? <EligibilityTable rows={data} types={types} designations={designations} /> : tab === "police-units" ?
       <DataTable rows={data} columns={[
         { key: "name", label: "Police Unit / Station" },
@@ -268,12 +314,18 @@ export function MastersPage() {
         { key: "contactNumber", label: "Contact" },
         { key: "isActive", label: "Status", render: (r) => <Chip size="small" color={r.isActive ? "success" : "default"} label={r.isActive ? "Active" : "Inactive"} /> },
         { key: "actions", label: "Actions", render: (r) => <RowActions onEdit={() => edit(r)} onDelete={r.isActive ? () => remove(r) : undefined} /> }
-      ]} /> :
+      ]} renderBeforeRow={(row) => editing?.id === row.id ? <Box>
+        <Typography fontWeight={650} mb={1}>Edit Police Unit / Station: {row.name}</Typography>
+        {masterForm("edit")}
+      </Box> : null} /> :
       <DataTable rows={data} columns={[
         { key: "name", label: "Name" },
         { key: tab === "designations" ? "code" : "isActive", label: tab === "designations" ? "Code" : "Status", render: tab === "designations" ? undefined : (r) => <Chip size="small" color={r.isActive ? "success" : "default"} label={r.isActive ? "Active" : "Inactive"} /> },
         { key: "actions", label: "Actions", render: (r) => <RowActions onEdit={() => edit(r)} onDelete={r.isActive ? () => remove(r) : undefined} /> }
-      ]} />}
+      ]} renderBeforeRow={(row) => editing?.id === row.id ? <Box>
+        <Typography fontWeight={650} mb={1}>Edit {tab.replaceAll("-", " ")}: {row.name}</Typography>
+        {masterForm("edit")}
+      </Box> : null} />}
   </Page>;
 }
 function EligibilityTable({ rows }: { rows: AnyRow[]; types: AnyRow[]; designations: AnyRow[] }) {
@@ -289,18 +341,29 @@ function EligibilityTable({ rows }: { rows: AnyRow[]; types: AnyRow[]; designati
 export function PersonnelPage() {
   const { user } = useAuth();
   const client = useQueryClient();
-  const { data = [], error } = useApi("personnel", "/personnel");
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const { data: result = { rows: [], total: 0, page: 1, pageSize: 50, totalPages: 1 }, error, isLoading } = useQuery<{ rows: AnyRow[]; total: number; page: number; pageSize: number; totalPages: number }>({
+    queryKey: ["personnel", page, appliedSearch],
+    queryFn: () => api.get(`/personnel?summary=true&page=${page}&pageSize=50&q=${encodeURIComponent(appliedSearch)}`).then((response) => response.data.data)
+  });
+  const data = result.rows;
   const { data: units = [] } = useApi("units", "/police-units");
   const { data: designations = [] } = useApi("designations", "/designations");
-  const [form, setForm] = useState({ indexNumber: "", buckleNumber: "", fullName: "", mobileNumber: "", designationId: "", currentPoliceUnitId: user?.policeUnitId ?? "", currentAddress: "" });
+  const [form, setForm] = useState({ indexNumber: "", buckleNumber: "", fullName: "", mobileNumber: "", designationId: "", currentPoliceUnitId: user?.policeUnitId ?? "", currentAddress: "", serviceJoinDate: "", lastPostingOutsideRajkot: "" });
   const [editing, setEditing] = useState<AnyRow | null>(null);
   const [requestError, setRequestError] = useState<unknown>();
+  const resetPersonnelForm = () => {
+    setEditing(null);
+    setForm({ indexNumber: "", buckleNumber: "", fullName: "", mobileNumber: "", designationId: "", currentPoliceUnitId: user?.policeUnitId ?? "", currentAddress: "", serviceJoinDate: "", lastPostingOutsideRajkot: "" });
+  };
   const save = async () => {
     try {
-      if (editing) await api.patch(`/personnel/${editing.id}`, form);
-      else await api.post("/personnel", form);
-      setEditing(null);
-      setForm({ indexNumber: "", buckleNumber: "", fullName: "", mobileNumber: "", designationId: "", currentPoliceUnitId: user?.policeUnitId ?? "", currentAddress: "" });
+      const input = { ...form, serviceJoinDate: form.serviceJoinDate || null, lastPostingOutsideRajkot: form.lastPostingOutsideRajkot || null };
+      if (editing) await api.patch(`/personnel/${editing.id}`, input);
+      else await api.post("/personnel", input);
+      resetPersonnelForm();
       await client.invalidateQueries({ queryKey: ["personnel"] });
       await client.invalidateQueries({ queryKey: ["quarter-personnel"] });
     }
@@ -310,7 +373,8 @@ export function PersonnelPage() {
     setEditing(row);
     setForm({
       indexNumber: row.indexNumber, buckleNumber: row.buckleNumber, fullName: row.fullName, mobileNumber: row.mobileNumber,
-      designationId: row.designationId, currentPoliceUnitId: row.currentPoliceUnitId, currentAddress: row.currentAddress
+      designationId: row.designationId, currentPoliceUnitId: row.currentPoliceUnitId, currentAddress: row.currentAddress,
+      serviceJoinDate: row.serviceJoinDate?.slice(0, 10) ?? "", lastPostingOutsideRajkot: row.lastPostingOutsideRajkot ?? ""
     });
   };
   const remove = async (row: AnyRow) => {
@@ -318,56 +382,96 @@ export function PersonnelPage() {
     try { await api.delete(`/personnel/${row.id}`); await client.invalidateQueries({ queryKey: ["personnel"] }); }
     catch (e) { setRequestError(e); }
   };
+  const personnelForm = (mode: "create" | "edit") => <Grid container spacing={2}>
+    {(["indexNumber", "buckleNumber", "fullName", "mobileNumber", "currentAddress", "lastPostingOutsideRajkot"] as const).map((key) =>
+      <Grid key={key} size={{ xs: 12, md: 4 }}><TextField fullWidth label={key.replaceAll(/([A-Z])/g, " $1")} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} /></Grid>)}
+    <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth type="date" label="Service Join Date" value={form.serviceJoinDate} onChange={(e) => setForm({ ...form, serviceJoinDate: e.target.value })} slotProps={{ inputLabel: { shrink: true } }} /></Grid>
+    <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth select label="Designation" value={form.designationId} onChange={(e) => setForm({ ...form, designationId: e.target.value })}>{designations.map((d: AnyRow) => <MenuItem key={d.id} value={d.id}>{d.code}</MenuItem>)}</TextField></Grid>
+    <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth select label="Posting" value={form.currentPoliceUnitId} onChange={(e) => setForm({ ...form, currentPoliceUnitId: e.target.value })}>{units.map((u: AnyRow) => <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>)}</TextField></Grid>
+    <Grid size={{ xs: 12 }}><Stack direction="row" spacing={1}>
+      <Button variant="contained" onClick={save}>{mode === "edit" ? "Update Personnel" : "Create Personnel"}</Button>
+      {mode === "edit" && <Button onClick={resetPersonnelForm}>Cancel</Button>}
+    </Stack></Grid>
+  </Grid>;
   return <Page title="Personnel Records">
     <ErrorText error={error || requestError} />
-    {(user?.role === "ADMIN" || user?.role === "UNIT_USER") && <Paper variant="outlined" sx={{ p: 2 }}><Grid container spacing={2}>
-      {(["indexNumber", "buckleNumber", "fullName", "mobileNumber", "currentAddress"] as const).map((key) =>
-        <Grid key={key} size={{ xs: 12, md: 4 }}><TextField fullWidth label={key.replaceAll(/([A-Z])/g, " $1")} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} /></Grid>)}
-      <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth select label="Designation" value={form.designationId} onChange={(e) => setForm({ ...form, designationId: e.target.value })}>{designations.map((d: AnyRow) => <MenuItem key={d.id} value={d.id}>{d.code}</MenuItem>)}</TextField></Grid>
-      <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth select label="Posting" value={form.currentPoliceUnitId} onChange={(e) => setForm({ ...form, currentPoliceUnitId: e.target.value })}>{units.map((u: AnyRow) => <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>)}</TextField></Grid>
-      <Grid size={{ xs: 12 }}><Stack direction="row" spacing={1}>
-        <Button variant="contained" onClick={save}>{editing ? "Update Personnel" : "Create Personnel"}</Button>
-        {editing && <Button onClick={() => { setEditing(null); setForm({ indexNumber: "", buckleNumber: "", fullName: "", mobileNumber: "", designationId: "", currentPoliceUnitId: user?.policeUnitId ?? "", currentAddress: "" }); }}>Cancel</Button>}
-      </Stack></Grid>
-    </Grid></Paper>}
-    <DataTable rows={data} columns={[
+    {user?.role === "ADMIN" && !editing && <Paper variant="outlined" sx={{ p: 2 }}>{personnelForm("create")}</Paper>}
+    <Paper variant="outlined" sx={{ p: 2 }}><Stack direction={{ xs: "column", md: "row" }} spacing={2} justifyContent="space-between" alignItems={{ md: "center" }}>
+      <Stack direction="row" spacing={1}>
+        <TextField size="small" label="Search name, index or buckle" value={search} onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { setPage(1); setAppliedSearch(search.trim()); } }} sx={{ minWidth: 300 }} />
+        <Button variant="outlined" onClick={() => { setPage(1); setAppliedSearch(search.trim()); }}>Search</Button>
+        {appliedSearch && <Button onClick={() => { setSearch(""); setAppliedSearch(""); setPage(1); }}>Clear</Button>}
+      </Stack>
+      <Typography color="text.secondary">{result.total} record{result.total === 1 ? "" : "s"} found</Typography>
+    </Stack></Paper>
+    {isLoading ? <Box py={4} display="flex" justifyContent="center"><CircularProgress /></Box> : <DataTable rows={data} columns={[
       { key: "indexNumber", label: "Index" }, { key: "buckleNumber", label: "Buckle" }, { key: "fullName", label: "Name" },
       { key: "designation", label: "Rank", render: (r) => r.designation.code }, { key: "currentPoliceUnit", label: "Posting", render: (r) => r.currentPoliceUnit.name },
       { key: "occupancies", label: "Current Quarter", render: (r) => r.occupancies[0]?.quarter.houseNumber ?? "-" },
       { key: "isActive", label: "Status", render: (r) => <Chip size="small" color={r.isActive ? "success" : "default"} label={r.isActive ? "Active" : "Inactive"} /> },
-      { key: "actions", label: "Actions", render: (r) => (user?.role === "ADMIN" || user?.role === "UNIT_USER") ? <RowActions onEdit={() => edit(r)} onDelete={user?.role === "ADMIN" && r.isActive ? () => remove(r) : undefined} /> : null }
-    ]} />
+      { key: "actions", label: "Actions", render: (r) => user?.role === "ADMIN" ? <RowActions onEdit={() => edit(r)} onDelete={r.isActive ? () => remove(r) : undefined} /> : null }
+    ]} renderBeforeRow={(row) => editing?.id === row.id ? <Box>
+      <Typography fontWeight={650} mb={1}>Edit personnel: {row.fullName}</Typography>
+      {personnelForm("edit")}
+    </Box> : null} />}
+    <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={2}>
+      <Button disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>Previous</Button>
+      <Typography>Page {result.page} of {result.totalPages}</Typography>
+      <Button disabled={page >= result.totalPages} onClick={() => setPage((current) => current + 1)}>Next</Button>
+    </Stack>
   </Page>;
 }
 
 export function QuartersPage() {
   const { user } = useAuth();
   const client = useQueryClient();
-  const { data = [], error } = useApi("quarters", "/quarters");
+  const [page, setPage] = useState(1);
+  const { data: quarterResult = { rows: [], total: 0, page: 1, pageSize: 50, totalPages: 1 }, error, isLoading, isFetching } = useQuery<{ rows: AnyRow[]; total: number; page: number; pageSize: number; totalPages: number }>({
+    queryKey: ["quarters", page],
+    queryFn: () => api.get(`/quarters?summary=true&page=${page}&pageSize=50`).then((response) => response.data.data)
+  });
+  const data = quarterResult.rows;
   const { data: areas = [] } = useApi("areas", "/areas");
   const { data: types = [] } = useApi("quarter-types", "/quarter-types");
-  const { data: personnel = [] } = useApi("quarter-personnel", "/personnel", user?.role === "ADMIN");
+  const { data: personnel = [] } = useApi("quarter-personnel", "/personnel/options", user?.role === "ADMIN");
+  const { data: availableForOccupancy = [] } = useApi("inventory-available-quarters", "/quarters/available", user?.role === "ADMIN");
   const { data: requests = [] } = useApi("quarter-change-requests", "/quarter-change-requests", user?.role === "ADMIN" || user?.role === "CORRESPONDENCE_BRANCH");
   const editable = user?.role === "ADMIN" || user?.role === "CORRESPONDENCE_BRANCH";
   const [form, setForm] = useState({ areaId: "", quarterTypeId: "", houseNumber: "", wing: "", block: "", floor: "", status: "AVAILABLE" });
   const [editing, setEditing] = useState<AnyRow | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
   const [occupancy, setOccupancy] = useState({ personnelId: "", quarterId: "", allocatedDate: new Date().toISOString().slice(0, 10) });
   const [requestError, setRequestError] = useState<unknown>();
-  const refresh = () => Promise.all([client.invalidateQueries({ queryKey: ["quarters"] }), client.invalidateQueries({ queryKey: ["quarter-change-requests"] })]);
+  const resetQuarterForm = () => {
+    setEditing(null);
+    setForm({ areaId: "", quarterTypeId: "", houseNumber: "", wing: "", block: "", floor: "", status: "AVAILABLE" });
+  };
+  const refresh = () => Promise.all([
+    client.invalidateQueries({ queryKey: ["quarters"] }),
+    client.invalidateQueries({ queryKey: ["inventory-available-quarters"] }),
+    client.invalidateQueries({ queryKey: ["quarter-change-requests"] })
+  ]);
   const save = async () => {
     try {
       if (editing) await api.patch(`/quarters/${editing.id}`, form);
       else await api.post("/quarters", form);
-      setEditing(null);
-      setForm({ areaId: "", quarterTypeId: "", houseNumber: "", wing: "", block: "", floor: "", status: "AVAILABLE" });
+      resetQuarterForm();
       await refresh();
     } catch (e) { setRequestError(e); }
   };
   const upload = async () => {
     if (!file) return;
     const payload = new FormData(); payload.append("file", file);
-    try { await api.post("/quarters/bulk-upload", payload); await refresh(); } catch (e) { setRequestError(e); }
+    try {
+      setImporting(true);
+      await api.post("/quarters/bulk-upload", payload);
+      setFile(null);
+      setPage(1);
+      await refresh();
+    } catch (e) { setRequestError(e); }
+    finally { setImporting(false); }
   };
   const addOccupancy = async () => {
     try { await api.post("/occupancy-records", occupancy); await refresh(); } catch (e) { setRequestError(e); }
@@ -380,19 +484,27 @@ export function QuartersPage() {
     if (!window.confirm(`Deactivate quarter ${row.houseNumber}?`)) return;
     try { await api.delete(`/quarters/${row.id}`); await refresh(); } catch (e) { setRequestError(e); }
   };
+  const quarterForm = (mode: "create" | "edit") => <Grid container spacing={2}>
+    <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Area" value={form.areaId} onChange={(e) => setForm({ ...form, areaId: e.target.value })}>{areas.map((a: AnyRow) => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}</TextField></Grid>
+    <Grid size={{ xs: 12, md: 2 }}><TextField fullWidth select label="Type" value={form.quarterTypeId} onChange={(e) => setForm({ ...form, quarterTypeId: e.target.value })}>{types.map((a: AnyRow) => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}</TextField></Grid>
+    {(["houseNumber", "wing", "block", "floor"] as const).map((name) => <Grid key={name} size={{ xs: 6, md: 1.5 }}><TextField fullWidth label={name} value={form[name]} onChange={(e) => setForm({ ...form, [name]: e.target.value })} /></Grid>)}
+    <Grid size={{ xs: 12, md: 2 }}><Button fullWidth variant="contained" sx={{ height: 56 }} onClick={save}>{mode === "edit" ? "Update" : "Add"}</Button></Grid>
+    {mode === "edit" && <Grid size={{ xs: 12, md: 2 }}><Button fullWidth sx={{ height: 56 }} onClick={resetQuarterForm}>Cancel</Button></Grid>}
+  </Grid>;
   return <Page title="Quarter Inventory">
     <ErrorText error={error || requestError} />
     {editable && <Paper variant="outlined" sx={{ p: 2 }}>
-      <Typography variant="subtitle1" fontWeight={600} mb={2}>{editing ? "Edit Quarter" : "Add Quarter"} {user?.role === "CORRESPONDENCE_BRANCH" && "(requires Admin approval)"}</Typography>
+      {!editing && <>
+        <Typography variant="subtitle1" fontWeight={600} mb={2}>Add Quarter {user?.role === "CORRESPONDENCE_BRANCH" && "(requires Admin approval)"}</Typography>
+        {quarterForm("create")}
+        <Divider sx={{ my: 2 }} />
+      </>}
+      {editing && <Alert severity="info" sx={{ mb: 2 }}>Editing is open directly above the selected quarter row below. Save or cancel there before adding another quarter.</Alert>}
       <Grid container spacing={2}>
-        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Area" value={form.areaId} onChange={(e) => setForm({ ...form, areaId: e.target.value })}>{areas.map((a: AnyRow) => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}</TextField></Grid>
-        <Grid size={{ xs: 12, md: 2 }}><TextField fullWidth select label="Type" value={form.quarterTypeId} onChange={(e) => setForm({ ...form, quarterTypeId: e.target.value })}>{types.map((a: AnyRow) => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}</TextField></Grid>
-        {(["houseNumber", "wing", "block", "floor"] as const).map((name) => <Grid key={name} size={{ xs: 6, md: 1.5 }}><TextField fullWidth label={name} value={form[name]} onChange={(e) => setForm({ ...form, [name]: e.target.value })} /></Grid>)}
-        <Grid size={{ xs: 12, md: 2 }}><Button fullWidth variant="contained" sx={{ height: 56 }} onClick={save}>{editing ? "Update" : "Add"}</Button></Grid>
-        {editing && <Grid size={{ xs: 12, md: 2 }}><Button fullWidth sx={{ height: 56 }} onClick={() => { setEditing(null); setForm({ areaId: "", quarterTypeId: "", houseNumber: "", wing: "", block: "", floor: "", status: "AVAILABLE" }); }}>Cancel</Button></Grid>}
-        <Grid size={{ xs: 12 }}><Divider /></Grid>
-        <Grid size={{ xs: 12, md: 5 }}><Button component="label" variant="outlined">Select CSV/XLSX Import<input hidden type="file" accept=".csv,.xlsx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Button> {file?.name}</Grid>
-        <Grid size={{ xs: 12, md: 2 }}><Button variant="contained" disabled={!file} onClick={upload}>Import</Button></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><Button component="label" variant="outlined">Select CSV/XLSX Import<input hidden type="file" accept=".csv,.xlsx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Button> {file?.name}</Grid>
+        <Grid size={{ xs: 12, md: 3 }}><Button variant="outlined" startIcon={<DownloadIcon />} onClick={() => downloadFile("/quarters/import-template.xlsx", "quarter-import-template.xlsx")}>Sample XLSX Format</Button></Grid>
+        <Grid size={{ xs: 12, md: 2 }}><Button variant="contained" disabled={!file || importing} onClick={upload}>{importing ? "Importing..." : "Import"}</Button></Grid>
+        {importing && <Grid size={{ xs: 12 }}><LinearProgress /></Grid>}
       </Grid>
     </Paper>}
     {user?.role === "ADMIN" && <Paper variant="outlined" sx={{ p: 2 }}>
@@ -402,12 +514,18 @@ export function QuartersPage() {
           {personnel.map((p: AnyRow) => <MenuItem key={p.id} value={p.id}>{p.fullName} / {p.buckleNumber}</MenuItem>)}
         </TextField>
         <TextField select label="Available quarter" value={occupancy.quarterId} onChange={(e) => setOccupancy({ ...occupancy, quarterId: e.target.value })} sx={{ minWidth: 260 }}>
-          {data.filter((q: AnyRow) => q.status === "AVAILABLE").map((q: AnyRow) => <MenuItem key={q.id} value={q.id}>{q.area.name} / {q.houseNumber}</MenuItem>)}
+          {availableForOccupancy.map((q: AnyRow) => <MenuItem key={q.id} value={q.id}>{q.area.name} / {q.houseNumber}</MenuItem>)}
         </TextField>
         <TextField type="date" label="Allocated date" value={occupancy.allocatedDate} onChange={(e) => setOccupancy({ ...occupancy, allocatedDate: e.target.value })} slotProps={{ inputLabel: { shrink: true } }} />
         <Button variant="contained" onClick={addOccupancy} disabled={!occupancy.personnelId || !occupancy.quarterId}>Record</Button>
       </Stack>
     </Paper>}
+    {isFetching && !isLoading && <LinearProgress />}
+    {isLoading ? <Paper variant="outlined" sx={{ p: 4, textAlign: "center" }}>
+      <CircularProgress />
+      <Typography color="text.secondary" mt={2}>Loading quarter inventory in the background...</Typography>
+    </Paper> : <>
+    <Typography color="text.secondary">Showing {data.length} of {quarterResult.total} quarters. Page {quarterResult.page} of {quarterResult.totalPages}.</Typography>
     <DataTable rows={data} columns={[
       { key: "houseNumber", label: "House No." }, { key: "area", label: "Area", render: (r) => r.area.name },
       { key: "quarterType", label: "Type", render: (r) => r.quarterType.name },
@@ -417,7 +535,16 @@ export function QuartersPage() {
         try { await api.patch(`/quarters/${r.id}/status`, { status: e.target.value, reason: "Updated through inventory screen" }); await refresh(); } catch (err) { setRequestError(err); }
       }}><MenuItem value="" disabled>Controlled occupancy</MenuItem>{statuses.filter((s) => s !== "OCCUPIED").map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}</TextField> : null },
       { key: "actions", label: "Actions", render: (r) => editable ? <RowActions onEdit={r.isActive ? () => edit(r) : undefined} onDelete={user?.role === "ADMIN" && r.isActive ? () => remove(r) : undefined} /> : null }
-    ]} />
+    ]} renderBeforeRow={(row) => editing?.id === row.id ? <Box>
+      <Typography fontWeight={650} mb={1}>Edit quarter: {row.houseNumber}</Typography>
+      {quarterForm("edit")}
+    </Box> : null} />
+    <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={2}>
+      <Button disabled={page <= 1 || isFetching} onClick={() => setPage((current) => current - 1)}>Previous</Button>
+      <Typography>Page {quarterResult.page} of {quarterResult.totalPages}</Typography>
+      <Button disabled={page >= quarterResult.totalPages || isFetching} onClick={() => setPage((current) => current + 1)}>Next</Button>
+    </Stack>
+    </>}
     {(user?.role === "ADMIN" || user?.role === "CORRESPONDENCE_BRANCH") && <Box>
       <Typography variant="h6" mb={1}>Inventory Change Requests</Typography>
       <DataTable rows={requests} columns={[
@@ -435,19 +562,44 @@ export function ApplicationsPage() {
   const { user } = useAuth();
   const client = useQueryClient();
   const { data: applications = [], error } = useApi("applications", "/applications");
-  const { data: personnel = [] } = useApi("personnel", "/personnel", user?.role === "UNIT_USER");
   const { data: areas = [] } = useApi("areas", "/areas", user?.role === "UNIT_USER");
   const { data: types = [] } = useApi("quarter-types", "/quarter-types", user?.role === "UNIT_USER");
+  const { data: designations = [] } = useApi("designations", "/designations", user?.role === "UNIT_USER");
+  const { data: eligibilityRules = [] } = useApi("application-eligibility", "/eligibility-rules", user?.role === "UNIT_USER");
   const { data: available = [] } = useApi("available-quarters", "/quarters/available", user?.role === "SUPER_ADMIN");
   const [selected, setSelected] = useState<AnyRow | null>(null);
   const [requestError, setRequestError] = useState<unknown>();
-  const [form, setForm] = useState({ personnelId: "", areaId: "", quarterTypeId: "", areaId2: "", quarterTypeId2: "", areaId3: "", quarterTypeId3: "", isSpecialCase: false, specialCaseCategory: "MEDICAL", specialCaseReason: "", reasonForChange: "", applyingForGroup: false, groupDetails: "" });
+  const emptyForm = { indexNumber: "", buckleNumber: "", fullName: "", mobileNumber: "", designationId: "", currentAddress: "", serviceJoinDate: "", lastPostingOutsideRajkot: "", areaId: "", quarterTypeId: "", areaId2: "", quarterTypeId2: "", areaId3: "", quarterTypeId3: "", isSpecialCase: false, specialCaseCategory: "MEDICAL", specialCaseReason: "", reasonForChange: "", applyingForGroup: false, groupDetails: "" };
+  const [requestType, setRequestType] = useState<"" | "NEW_ALLOTMENT" | "TRANSFER_CHANGE">("");
+  const [form, setForm] = useState(emptyForm);
   const [letter, setLetter] = useState<File | null>(null);
   const [support, setSupport] = useState<File | null>(null);
-  const person = personnel.find((p: AnyRow) => p.id === form.personnelId);
-  const hasQuarter = Boolean(person?.occupancies?.length);
-  const applicationType = hasQuarter ? "TRANSFER_CHANGE" : "NEW_ALLOTMENT";
+  const lookupParams = new URLSearchParams();
+  if (form.indexNumber.trim()) lookupParams.set("indexNumber", form.indexNumber.trim());
+  if (form.buckleNumber.trim()) lookupParams.set("buckleNumber", form.buckleNumber.trim());
+  const { data: matches = [] } = useQuery<AnyRow[]>({
+    queryKey: ["applicant-lookup", form.indexNumber, form.buckleNumber],
+    queryFn: () => api.get(`/personnel/search-duplicate?${lookupParams.toString()}`).then((response) => response.data.data),
+    enabled: user?.role === "UNIT_USER" && lookupParams.size > 0
+  });
+  const match = matches.find((item) => item.person.indexNumber === form.indexNumber.trim() || item.person.buckleNumber === form.buckleNumber.trim());
+  const hasQuarter = Boolean(match?.currentQuarter);
+  const lookupComplete = Boolean(form.indexNumber.trim() && form.buckleNumber.trim());
+  const selectionConflict = (requestType === "NEW_ALLOTMENT" && hasQuarter) || (requestType === "TRANSFER_CHANGE" && lookupComplete && !hasQuarter);
+  const eligibleTypes = form.designationId
+    ? types.filter((type: AnyRow) => eligibilityRules.some((rule: AnyRow) => rule.designationId === form.designationId && rule.quarterTypeId === type.id && rule.isEligible))
+    : [];
+  const hasIneligiblePreference = [form.quarterTypeId, form.quarterTypeId2, form.quarterTypeId3]
+    .filter(Boolean)
+    .some((typeId) => !eligibleTypes.some((type: AnyRow) => type.id === typeId));
   const reload = async () => { await client.invalidateQueries({ queryKey: ["applications"] }); };
+  const chooseRequestType = (type: "NEW_ALLOTMENT" | "TRANSFER_CHANGE") => {
+    setRequestType(type);
+    setForm(emptyForm);
+    setLetter(null);
+    setSupport(null);
+    setRequestError(undefined);
+  };
   async function upload(applicationId: string, document: File, attachmentType: string) {
     const body = new FormData();
     body.append("attachmentType", attachmentType);
@@ -459,7 +611,12 @@ export function ApplicationsPage() {
       if (!letter) throw new Error("Application letter is required");
       if (form.isSpecialCase && !support) throw new Error("Special case document is required");
       const response = await api.post("/applications", {
-        applicationType, personnelId: form.personnelId, currentQuarterId: person?.occupancies?.[0]?.quarterId ?? null,
+        applicationType: requestType,
+        applicant: {
+          indexNumber: form.indexNumber, buckleNumber: form.buckleNumber, fullName: form.fullName,
+          mobileNumber: form.mobileNumber, designationId: form.designationId, currentAddress: form.currentAddress,
+          serviceJoinDate: form.serviceJoinDate, lastPostingOutsideRajkot: form.lastPostingOutsideRajkot || null
+        },
         reasonForChange: form.reasonForChange || null, applyingForGroup: form.applyingForGroup, groupDetails: form.groupDetails || null,
         isSpecialCase: form.isSpecialCase, specialCaseCategory: form.isSpecialCase ? form.specialCaseCategory : null,
         specialCaseReason: form.isSpecialCase ? form.specialCaseReason : null,
@@ -473,6 +630,10 @@ export function ApplicationsPage() {
       await upload(id, letter, "APPLICATION_LETTER");
       if (support) await upload(id, support, "SPECIAL_CASE_DOCUMENT");
       await api.post(`/applications/${id}/submit`);
+      setForm(emptyForm);
+      setRequestType("");
+      setLetter(null);
+      setSupport(null);
       await reload();
     } catch (e) { setRequestError(e); }
   };
@@ -481,19 +642,46 @@ export function ApplicationsPage() {
   };
   return <Page title="Applications">
     <ErrorText error={error || requestError} />
+    {user?.role === "SUPER_ADMIN" && <Alert severity="info" sx={{ mb: 2 }}>
+      Quarter allotment is available after Administrator and Correspondence verification. Records at <b>SUPER_ADMIN_REVIEW</b> can be approved for allotment; records at <b>APPROVED_PENDING_ALLOTMENT</b> allow final quarter selection.
+    </Alert>}
     {user?.role === "UNIT_USER" && <Paper variant="outlined" sx={{ p: 2 }}>
-      <Typography variant="h6" mb={2}>New Application</Typography>
-      {!personnel.length && <Alert severity="info" sx={{ mb: 2 }}>Create a personnel record first before submitting an application.</Alert>}
+      <Typography variant="h6" mb={2}>Create Application</Typography>
+      {!requestType ? <Stack spacing={2}>
+        <Typography color="text.secondary">Select the request type to begin. Only fields relevant to that request will be shown.</Typography>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+          <Button variant="contained" size="large" onClick={() => chooseRequestType("NEW_ALLOTMENT")}>New Allotment</Button>
+          <Button variant="outlined" size="large" onClick={() => chooseRequestType("TRANSFER_CHANGE")}>Transfer / Quarter Change</Button>
+        </Stack>
+      </Stack> : <>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }} mb={2}>
+        <Chip color="primary" label={requestType === "NEW_ALLOTMENT" ? "New Allotment" : "Transfer / Quarter Change"} />
+        <Button size="small" onClick={() => chooseRequestType(requestType === "NEW_ALLOTMENT" ? "TRANSFER_CHANGE" : "NEW_ALLOTMENT")}>Change Request Type</Button>
+      </Stack>
+      <Alert severity="info" sx={{ mb: 2 }}>Index Number means the official departmental employee/service index number. Enter the applicant details; the system creates or reuses the linked profile automatically.</Alert>
+      {match?.activeApplication && <Alert severity="warning" sx={{ mb: 2 }}>This personnel already has active application {match.activeApplication.applicationNo}.</Alert>}
+      {requestType === "NEW_ALLOTMENT" && hasQuarter && <Alert severity="error" sx={{ mb: 2 }}>An occupied quarter is already recorded for this applicant. Select Transfer / Quarter Change.</Alert>}
+      {requestType === "TRANSFER_CHANGE" && lookupComplete && !hasQuarter && <Alert severity="error" sx={{ mb: 2 }}>No current occupied quarter was found for this applicant. Transfer/change can be submitted only for an existing occupant.</Alert>}
+      {requestType === "TRANSFER_CHANGE" && hasQuarter && <Alert severity="info" sx={{ mb: 2 }}>Existing occupied quarter verified. Provide the reason for the requested change.</Alert>}
+      {form.designationId && <Alert severity={eligibleTypes.length ? "success" : "error"} sx={{ mb: 2 }}>
+        {eligibleTypes.length ? `Eligible quarter types for the selected designation: ${eligibleTypes.map((type: AnyRow) => type.name).join(", ")}.` : "No quarter type is currently eligible for the selected designation."}
+      </Alert>}
       <Grid container spacing={2}>
-        <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth select label="Personnel" value={form.personnelId} onChange={(e) => setForm({ ...form, personnelId: e.target.value })}>{personnel.map((p: AnyRow) => <MenuItem key={p.id} value={p.id}>{p.fullName} / {p.buckleNumber}</MenuItem>)}</TextField></Grid>
-        <Grid size={{ xs: 12, md: 2 }}><TextField fullWidth label="Application Type" value={applicationType} slotProps={{ input: { readOnly: true } }} /></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required label="Index Number" helperText="Official employee/service index number" value={form.indexNumber} onChange={(e) => setForm({ ...form, indexNumber: e.target.value })} /></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required label="Buckle Number" value={form.buckleNumber} onChange={(e) => setForm({ ...form, buckleNumber: e.target.value })} /></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required label="Full Name" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required label="Mobile Number" value={form.mobileNumber} onChange={(e) => setForm({ ...form, mobileNumber: e.target.value })} /></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required select label="Designation" value={form.designationId} onChange={(e) => setForm({ ...form, designationId: e.target.value, quarterTypeId: "", quarterTypeId2: "", quarterTypeId3: "" })}>{designations.map((d: AnyRow) => <MenuItem key={d.id} value={d.id}>{d.code} - {d.name}</MenuItem>)}</TextField></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required type="date" label="Service Join Date" value={form.serviceJoinDate} onChange={(e) => setForm({ ...form, serviceJoinDate: e.target.value })} slotProps={{ inputLabel: { shrink: true } }} /></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required label="Current Address" value={form.currentAddress} onChange={(e) => setForm({ ...form, currentAddress: e.target.value })} /></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth label="Last Posting (if outside Rajkot)" value={form.lastPostingOutsideRajkot} onChange={(e) => setForm({ ...form, lastPostingOutsideRajkot: e.target.value })} /></Grid>
         <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Preferred Area" value={form.areaId} onChange={(e) => setForm({ ...form, areaId: e.target.value })}>{areas.map((a: AnyRow) => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}</TextField></Grid>
-        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Preferred Type" value={form.quarterTypeId} onChange={(e) => setForm({ ...form, quarterTypeId: e.target.value })}>{types.map((t: AnyRow) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}</TextField></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth required select disabled={!form.designationId} label="Preferred Type" helperText={!form.designationId ? "Select designation first" : "Eligible types only"} value={form.quarterTypeId} onChange={(e) => setForm({ ...form, quarterTypeId: e.target.value })}>{eligibleTypes.map((t: AnyRow) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}</TextField></Grid>
         <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Second Area (optional)" value={form.areaId2} onChange={(e) => setForm({ ...form, areaId2: e.target.value })}><MenuItem value="">None</MenuItem>{areas.map((a: AnyRow) => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}</TextField></Grid>
-        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Second Type" value={form.quarterTypeId2} onChange={(e) => setForm({ ...form, quarterTypeId2: e.target.value })}><MenuItem value="">None</MenuItem>{types.map((t: AnyRow) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}</TextField></Grid>
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select disabled={!form.designationId} label="Second Type" value={form.quarterTypeId2} onChange={(e) => setForm({ ...form, quarterTypeId2: e.target.value })}><MenuItem value="">None</MenuItem>{eligibleTypes.map((t: AnyRow) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}</TextField></Grid>
         <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Third Area (optional)" value={form.areaId3} onChange={(e) => setForm({ ...form, areaId3: e.target.value })}><MenuItem value="">None</MenuItem>{areas.map((a: AnyRow) => <MenuItem key={a.id} value={a.id}>{a.name}</MenuItem>)}</TextField></Grid>
-        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select label="Third Type" value={form.quarterTypeId3} onChange={(e) => setForm({ ...form, quarterTypeId3: e.target.value })}><MenuItem value="">None</MenuItem>{types.map((t: AnyRow) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}</TextField></Grid>
-        {hasQuarter && <Grid size={{ xs: 12 }}><TextField fullWidth label="Reason for transfer/change" value={form.reasonForChange} onChange={(e) => setForm({ ...form, reasonForChange: e.target.value })} /></Grid>}
+        <Grid size={{ xs: 12, md: 3 }}><TextField fullWidth select disabled={!form.designationId} label="Third Type" value={form.quarterTypeId3} onChange={(e) => setForm({ ...form, quarterTypeId3: e.target.value })}><MenuItem value="">None</MenuItem>{eligibleTypes.map((t: AnyRow) => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}</TextField></Grid>
+        {requestType === "TRANSFER_CHANGE" && <Grid size={{ xs: 12 }}><TextField fullWidth required label="Reason for transfer/change" value={form.reasonForChange} onChange={(e) => setForm({ ...form, reasonForChange: e.target.value })} /></Grid>}
         <Grid size={{ xs: 12, md: 4 }}><FormControlLabel control={<Switch checked={form.applyingForGroup} onChange={(_, value) => setForm({ ...form, applyingForGroup: value })} />} label="Applying for group" /></Grid>
         {form.applyingForGroup && <Grid size={{ xs: 12, md: 8 }}><TextField fullWidth label="Group details" value={form.groupDetails} onChange={(e) => setForm({ ...form, groupDetails: e.target.value })} /></Grid>}
         <Grid size={{ xs: 12, md: 4 }}><FormControlLabel control={<Switch checked={form.isSpecialCase} onChange={(_, value) => setForm({ ...form, isSpecialCase: value })} />} label="Special case / urgency" /></Grid>
@@ -503,11 +691,13 @@ export function ApplicationsPage() {
         </>}
         <Grid size={{ xs: 12, md: 4 }}><Button component="label" variant="outlined">Application Letter *<input hidden type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setLetter(e.target.files?.[0] ?? null)} /></Button> {letter?.name}</Grid>
         {form.isSpecialCase && <Grid size={{ xs: 12, md: 4 }}><Button component="label" variant="outlined">Supporting Document *<input hidden type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setSupport(e.target.files?.[0] ?? null)} /></Button> {support?.name}</Grid>}
-        <Grid size={{ xs: 12 }}><Button variant="contained" onClick={submitApplication} disabled={!form.personnelId || !form.areaId || !form.quarterTypeId}>Create and Submit</Button></Grid>
+        <Grid size={{ xs: 12 }}><Button variant="contained" onClick={submitApplication} disabled={!form.indexNumber || !form.buckleNumber || !form.fullName || !form.mobileNumber || !form.designationId || !form.currentAddress || !form.serviceJoinDate || !form.areaId || !form.quarterTypeId || (requestType === "TRANSFER_CHANGE" && !form.reasonForChange.trim()) || selectionConflict || hasIneligiblePreference || Boolean(match?.activeApplication)}>Create and Submit</Button></Grid>
       </Grid>
+      </>}
     </Paper>}
     <DataTable rows={applications} columns={[
       { key: "applicationNo", label: "Application No." }, { key: "personnel", label: "Personnel", render: (r) => r.personnel.fullName },
+      { key: "seniority", label: "Queue Position", render: (r) => <SeniorityView seniority={r.seniority} compact /> },
       { key: "applicationType", label: "Type" }, { key: "status", label: "Status", render: (r) => <Chip size="small" label={r.status} /> },
       { key: "isSpecialCase", label: "Special", render: (r) => r.isSpecialCase ? "Yes" : "No" },
       { key: "detail", label: "Action", render: (r) => <Button size="small" onClick={() => setSelected(r)}>View</Button> }
@@ -517,26 +707,38 @@ export function ApplicationsPage() {
       <DialogContent dividers>
         {selected && <Stack spacing={1}>
           <Typography><b>Personnel:</b> {selected.personnel.fullName} ({selected.personnel.designation.code})</Typography>
+          <Typography><b>Index / Buckle:</b> {selected.personnel.indexNumber} / {selected.personnel.buckleNumber}</Typography>
+          <Typography><b>Service Join Date:</b> {selected.personnel.serviceJoinDate ? new Date(selected.personnel.serviceJoinDate).toLocaleDateString() : "-"}</Typography>
+          <Typography><b>Last Posting Outside Rajkot:</b> {selected.personnel.lastPostingOutsideRajkot ?? "-"}</Typography>
+          <Box><Typography component="span" fontWeight={700}>Queue Position:</Typography><Box mt={0.5}><SeniorityView seniority={selected.seniority} /></Box></Box>
           <Typography><b>Status:</b> {selected.status}</Typography>
           <Typography><b>Preferences:</b> {selected.preferences.map((p: AnyRow) => `${p.area.name} / ${p.quarterType.name}`).join(", ")}</Typography>
           <Typography><b>Special case:</b> {selected.isSpecialCase ? `${selected.specialCaseCategory}: ${selected.specialCaseReason}` : "No"}</Typography>
+          {user?.role === "SUPER_ADMIN" && selected.status === "ADMIN_REVIEW" && <Alert severity="warning">Waiting for Administrator verification. Allotment actions become available after the application is forwarded through Correspondence review.</Alert>}
+          {user?.role === "SUPER_ADMIN" && selected.status === "CORRESPONDENCE_REVIEW" && <Alert severity="warning">Waiting for Correspondence verification. Once forwarded, you can approve this request for final allotment.</Alert>}
+          {user?.role === "SUPER_ADMIN" && selected.status === "SUPER_ADMIN_REVIEW" && <Alert severity="success">Verification is complete. Use <b>Approve For Allotment</b> below to enable quarter selection for this request.</Alert>}
           <Divider />
           <Typography fontWeight={600}>Attachments</Typography>
           {selected.attachments.map((a: AnyRow) => <Button key={a.id} startIcon={<DownloadIcon />} onClick={() => downloadFile(`/attachments/${a.id}/download`, a.originalFileName)}>{a.attachmentType}</Button>)}
-          {user?.role === "SUPER_ADMIN" && selected.status === "APPROVED_PENDING_ALLOTMENT" && <AllotControl quarters={available} application={selected} action={decision} />}
+          {user?.role === "SUPER_ADMIN" && selected.status === "APPROVED_PENDING_ALLOTMENT" && <Paper variant="outlined" sx={{ p: 2, mt: 1 }}>
+            <Typography variant="subtitle1" fontWeight={650} mb={1}>Allot Quarter</Typography>
+            <Typography variant="body2" color="text.secondary" mb={2}>Select an available quarter matching the requested eligible types, then complete final allotment.</Typography>
+            <AllotControl quarters={available} application={selected} action={decision} />
+          </Paper>}
         </Stack>}
       </DialogContent>
       <DialogActions>
         {selected && user?.role === "ADMIN" && (selected.status === "ADMIN_REVIEW" || selected.status === "DUPLICATE_REVIEW") && <>
           <Button onClick={() => decision(`/applications/${selected.id}/admin-review`, { action: "VERIFY" })}>{selected.status === "DUPLICATE_REVIEW" ? "Clear Duplicate" : "Verify"}</Button>
-          <Button color="error" onClick={() => decision(`/applications/${selected.id}/admin-review`, { action: "REJECT" })}>Reject</Button>
+          {selected.isSpecialCase && <Button color="warning" onClick={() => decision(`/applications/${selected.id}/special-case/reject`)}>Reject Special Priority</Button>}
+          <Button color="error" onClick={() => decision(`/applications/${selected.id}/admin-review`, { action: "REJECT" })}>Reject Application</Button>
         </>}
         {selected && user?.role === "CORRESPONDENCE_BRANCH" && selected.status === "CORRESPONDENCE_REVIEW" && <>
           <Button onClick={() => decision(`/applications/${selected.id}/correspondence-review`, { action: "VERIFY" })}>Verify</Button>
           <Button onClick={() => decision(`/applications/${selected.id}/correspondence-review`, { action: "RETURN" })}>Return</Button>
         </>}
         {selected && user?.role === "SUPER_ADMIN" && selected.status === "SUPER_ADMIN_REVIEW" && <>
-          <Button onClick={() => decision(`/applications/${selected.id}/super-admin/approve-pending-allotment`)}>Approve Allotment</Button>
+          <Button variant="contained" onClick={() => decision(`/applications/${selected.id}/super-admin/approve-pending-allotment`)}>Approve For Allotment</Button>
           <Button onClick={() => decision(`/applications/${selected.id}/super-admin/approve-waitlist`)}>Waitlist</Button>
           <Button color="error" onClick={() => decision(`/applications/${selected.id}/super-admin/reject`)}>Reject</Button>
         </>}
@@ -550,12 +752,15 @@ export function ApplicationsPage() {
 function AllotControl({ quarters, application, action }: { quarters: AnyRow[]; application: AnyRow; action: (url: string, body: AnyRow) => Promise<void> }) {
   const [quarterId, setQuarterId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  return <Stack direction="row" spacing={2} alignItems="center">
-    <TextField select label="Available Quarter" value={quarterId} onChange={(e) => setQuarterId(e.target.value)} sx={{ minWidth: 300 }}>
-      {quarters.map((q) => <MenuItem key={q.id} value={q.id}>{q.area.name} / {q.quarterType.name} / {q.houseNumber}</MenuItem>)}
+  const requestedTypeIds = new Set(application.preferences.map((preference: AnyRow) => preference.quarterType.id));
+  const matchingQuarters = quarters.filter((quarter) => requestedTypeIds.has(quarter.quarterType.id));
+  return <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+    <TextField fullWidth select label="Available Requested Quarter" value={quarterId} onChange={(e) => setQuarterId(e.target.value)} sx={{ minWidth: 340 }}>
+      {matchingQuarters.map((q) => <MenuItem key={q.id} value={q.id}>{q.area.name} / {q.quarterType.name} / {q.fullQuarterCode ?? q.houseNumber}</MenuItem>)}
     </TextField>
     <TextField type="date" label="Allotment Date" value={date} onChange={(e) => setDate(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-    <Button variant="contained" disabled={!quarterId} onClick={() => action(`/applications/${application.id}/super-admin/allot`, { quarterId, allotmentDate: date })}>Allot</Button>
+    <Button variant="contained" disabled={!quarterId} onClick={() => action(`/applications/${application.id}/super-admin/allot`, { quarterId, allotmentDate: date })}>Allot Quarter</Button>
+    {!matchingQuarters.length && <Typography color="error.main">No available quarter matches the requested types.</Typography>}
   </Stack>;
 }
 
