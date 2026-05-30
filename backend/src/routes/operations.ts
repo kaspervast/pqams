@@ -18,15 +18,55 @@ router.patch("/notifications/:id/read", asyncHandler(async (req, res) => {
   if (!updated.count) throw new ApiError(404, "Notification not found");
   return ok(res, null, "Notification read");
 }));
-router.get("/audit-logs", allow(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.VIEWER), asyncHandler(async (_req, res) => {
-  return ok(res, await prisma.auditLog.findMany({ include: { user: { select: { fullName: true, username: true } } }, orderBy: { createdAt: "desc" }, take: 500 }));
-}));
-
 const active = [
   ApplicationStatus.DRAFT, ApplicationStatus.SUBMITTED, ApplicationStatus.DUPLICATE_REVIEW, ApplicationStatus.ADMIN_REVIEW,
   ApplicationStatus.CORRESPONDENCE_REVIEW, ApplicationStatus.SUPER_ADMIN_REVIEW, ApplicationStatus.RETURNED_FOR_RECONSIDERATION,
   ApplicationStatus.APPROVED_WAITLIST, ApplicationStatus.APPROVED_PENDING_ALLOTMENT
 ];
+
+router.get("/audit-logs", allow(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.VIEWER), asyncHandler(async (_req, res) => {
+  const logs = await prisma.auditLog.findMany({
+    include: { user: { select: { fullName: true, username: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 500
+  });
+  const applicationIds = [...new Set(logs
+    .filter((log) => log.entityType === "APPLICATION" && log.entityId)
+    .map((log) => log.entityId as string))];
+  const [applications, queue] = await Promise.all([
+    applicationIds.length ? prisma.application.findMany({
+      where: { id: { in: applicationIds } },
+      select: {
+        id: true,
+        applicationNo: true,
+        applicationType: true,
+        status: true,
+        personnel: { select: { fullName: true } }
+      }
+    }) : [],
+    prisma.application.findMany({
+      where: { status: { in: seniorityApplicationStatuses }, submittedAt: { not: null } },
+      select: { id: true, isSpecialCase: true, submittedAt: true, createdAt: true },
+      orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }, { createdAt: "asc" }]
+    })
+  ]);
+  const queuePositions = new Map(queue.map((application, index) => [application.id, index + 1]));
+  const applicationMap = new Map(applications.map((application) => [application.id, application]));
+  return ok(res, logs.map((log) => {
+    const application = log.entityType === "APPLICATION" && log.entityId ? applicationMap.get(log.entityId) : null;
+    return {
+      ...log,
+      auditApplication: application ? {
+        applicationNo: application.applicationNo,
+        personnel: application.personnel.fullName,
+        queuePosition: queuePositions.get(application.id) ?? null,
+        applicationType: application.applicationType,
+        status: application.status
+      } : null
+    };
+  }));
+}));
+
 async function applicationCounts(unitId?: string) {
   const where = unitId ? { submittedByUnitId: unitId } : {};
   const [pending, returned, allotted, rejected] = await Promise.all([

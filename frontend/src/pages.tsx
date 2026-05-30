@@ -850,6 +850,10 @@ export function AuditPage() {
     <DataTable rows={data} columns={[
       { key: "createdAt", label: "Timestamp", render: (r) => new Date(r.createdAt).toLocaleString() },
       { key: "action", label: "Action" }, { key: "entityType", label: "Entity" },
+      { key: "applicationNo", label: "Application No.", render: (r) => r.auditApplication?.applicationNo ?? "-" },
+      { key: "personnel", label: "Personnel", render: (r) => r.auditApplication?.personnel ?? "-" },
+      { key: "queuePosition", label: "Queue Position", render: (r) => r.auditApplication?.queuePosition ? `#${r.auditApplication.queuePosition}` : "-" },
+      { key: "applicationType", label: "Type", render: (r) => r.auditApplication?.applicationType ?? "-" },
       { key: "details", label: "Details", render: auditDetails },
       { key: "user", label: "User", render: (r) => r.user?.username ?? "System" }, { key: "ipAddress", label: "IP" }
     ]} />
