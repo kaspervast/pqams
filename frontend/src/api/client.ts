@@ -11,6 +11,11 @@ export function setAccessToken(token: string | null) {
 
 api.interceptors.request.use((request) => {
   if (accessToken) request.headers.Authorization = `Bearer ${accessToken}`;
+  if ((request.method ?? "get").toLowerCase() === "get") {
+    request.headers["Cache-Control"] = "no-cache";
+    request.headers.Pragma = "no-cache";
+    request.params = { ...(request.params ?? {}), _ts: Date.now() };
+  }
   return request;
 });
 
@@ -48,4 +53,3 @@ export function errorMessage(error: unknown) {
   if (axios.isAxiosError(error)) return error.response?.data?.message ?? error.message;
   return error instanceof Error ? error.message : "Request failed";
 }
-
