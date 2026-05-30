@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, setAccessToken } from "../api/client";
 
 export type Role = "SUPER_ADMIN" | "ADMIN" | "CORRESPONDENCE_BRANCH" | "UNIT_USER" | "VIEWER";
@@ -21,6 +22,7 @@ type AuthValue = {
 const AuthContext = createContext<AuthValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -36,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     async login(username, password) {
       const { data } = await api.post("/auth/login", { username, password });
+      queryClient.clear();
       setAccessToken(data.data.accessToken);
       setUser(data.data.user);
     },
@@ -43,13 +46,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await api.post("/auth/logout").catch(() => undefined);
       setAccessToken(null);
       setUser(null);
+      queryClient.clear();
     },
     async changePassword(currentPassword, newPassword) {
       await api.post("/auth/change-password", { currentPassword, newPassword });
       setAccessToken(null);
       setUser(null);
+      queryClient.clear();
     }
-  }), [user, loading]);
+  }), [user, loading, queryClient]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
@@ -59,4 +64,3 @@ export function useAuth() {
   if (!value) throw new Error("Authentication context missing");
   return value;
 }
-

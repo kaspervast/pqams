@@ -36,7 +36,8 @@ function Guard({ roles, children }: { roles?: Role[]; children: ReactNode }) {
 function Notifications() {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const client = useQueryClient();
-  const { data = [] } = useQuery<any[]>({ queryKey: ["notifications"], queryFn: () => api.get("/notifications").then((response) => response.data.data) });
+  const { user } = useAuth();
+  const { data = [] } = useQuery<any[]>({ queryKey: ["notifications", user?.id, user?.role], queryFn: () => api.get("/notifications").then((response) => response.data.data) });
   const unread = data.filter((message) => !message.isRead).length;
   return <>
     <IconButton color="inherit" onClick={(event) => setAnchor(event.currentTarget)}><Badge badgeContent={unread} color="secondary"><NotificationsIcon /></Badge></IconButton>

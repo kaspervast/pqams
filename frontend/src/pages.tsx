@@ -21,8 +21,14 @@ const unitTypes = [
   { value: "OTHER", label: "Other" }
 ];
 
-function useApi<T = AnyRow[]>(key: string, path: string, enabled = true) {
-  return useQuery<T>({ queryKey: [key], queryFn: () => api.get(path).then((response) => response.data.data), enabled });
+function useApi<T = AnyRow[]>(key: string, path: string, enabled = true, refetchInterval?: number) {
+  const { user } = useAuth();
+  return useQuery<T>({
+    queryKey: [key, path, user?.id, user?.role],
+    queryFn: () => api.get(path).then((response) => response.data.data),
+    enabled,
+    refetchInterval
+  });
 }
 function ErrorText({ error }: { error: unknown }) {
   return error ? <Alert severity="error">{errorMessage(error)}</Alert> : null;
@@ -561,7 +567,7 @@ export function QuartersPage() {
 export function ApplicationsPage() {
   const { user } = useAuth();
   const client = useQueryClient();
-  const { data: applications = [], error } = useApi("applications", "/applications");
+  const { data: applications = [], error } = useApi("applications", "/applications", true, 5000);
   const { data: areas = [] } = useApi("areas", "/areas", user?.role === "UNIT_USER");
   const { data: types = [] } = useApi("quarter-types", "/quarter-types", user?.role === "UNIT_USER");
   const { data: designations = [] } = useApi("designations", "/designations", user?.role === "UNIT_USER");
