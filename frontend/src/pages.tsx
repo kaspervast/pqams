@@ -48,6 +48,15 @@ function formatAuditValue(value: unknown) {
   }
   return String(value);
 }
+function auditDisplayValue(row: AnyRow, key: string, side: "old" | "new", value: unknown) {
+  const display = row.displayValue?.[key]?.[side];
+  return display ? String(display) : formatAuditValue(value);
+}
+function auditFieldLabel(key: string) {
+  if (key === "quarterId") return "Quarter";
+  if (key === "allotmentDate") return "Allotment Date";
+  return key;
+}
 function auditDetails(row: AnyRow) {
   const oldValue = row.oldValue ?? {};
   const newValue = row.newValue ?? {};
@@ -65,7 +74,7 @@ function auditDetails(row: AnyRow) {
     .slice(0, 4);
   for (const key of changedFields) {
     if (key === "status" || key === "username" || key === "role" || key === "name" || key === "code" || key === "attachmentType" || key === "reportType" || key === "format") continue;
-    details.push(`${key}: ${formatAuditValue(oldObject[key])} -> ${formatAuditValue(newObject[key])}`);
+    details.push(`${auditFieldLabel(key)}: ${auditDisplayValue(row, key, "old", oldObject[key])} -> ${auditDisplayValue(row, key, "new", newObject[key])}`);
   }
   if (!details.length && row.entityId) details.push(`Record ${String(row.entityId).slice(0, 8)}...`);
   if (!details.length) details.push("No extra details recorded");

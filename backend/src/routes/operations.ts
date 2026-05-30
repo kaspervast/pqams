@@ -23,6 +23,10 @@ const active = [
   ApplicationStatus.CORRESPONDENCE_REVIEW, ApplicationStatus.SUPER_ADMIN_REVIEW, ApplicationStatus.RETURNED_FOR_RECONSIDERATION,
   ApplicationStatus.APPROVED_WAITLIST, ApplicationStatus.APPROVED_PENDING_ALLOTMENT
 ];
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function jsonObject(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
 
 router.get("/audit-logs", allow(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.VIEWER), asyncHandler(async (_req, res) => {
   const logs = await prisma.auditLog.findMany({
@@ -33,7 +37,11 @@ router.get("/audit-logs", allow(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.V
   const applicationIds = [...new Set(logs
     .filter((log) => log.entityType === "APPLICATION" && log.entityId)
     .map((log) => log.entityId as string))];
-  const [applications, queue] = await Promise.all([
+  const quarterIds = [...new Set(logs.flatMap((log) => {
+    const values = [jsonObject(log.oldValue).quarterId, jsonObject(log.newValue).quarterId];
+    return values.filter((value): value is string => typeof value === "string" && uuidPattern.test(value));
+  }))];
+  const [applications, queue, quarters] = await Promise.all([
     applicationIds.length ? prisma.application.findMany({
       where: { id: { in: applicationIds } },
       select: {
@@ -48,14 +56,31 @@ router.get("/audit-logs", allow(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.V
       where: { status: { in: seniorityApplicationStatuses }, submittedAt: { not: null } },
       select: { id: true, isSpecialCase: true, submittedAt: true, createdAt: true },
       orderBy: [{ isSpecialCase: "desc" }, { submittedAt: "asc" }, { createdAt: "asc" }]
-    })
+    }),
+    quarterIds.length ? prisma.quarter.findMany({
+      where: { id: { in: quarterIds } },
+      select: { id: true, fullQuarterCode: true, houseNumber: true, area: { select: { name: true } }, quarterType: { select: { name: true } } }
+    }) : []
   ]);
   const queuePositions = new Map(queue.map((application, index) => [application.id, index + 1]));
   const applicationMap = new Map(applications.map((application) => [application.id, application]));
+  const quarterMap = new Map(quarters.map((quarter) => [
+    quarter.id,
+    `${quarter.area.name} / ${quarter.quarterType.name} / ${quarter.fullQuarterCode ?? quarter.houseNumber}`
+  ]));
   return ok(res, logs.map((log) => {
     const application = log.entityType === "APPLICATION" && log.entityId ? applicationMap.get(log.entityId) : null;
+    const oldQuarterId = jsonObject(log.oldValue).quarterId;
+    const newQuarterId = jsonObject(log.newValue).quarterId;
+    const displayValue = {
+      quarterId: {
+        old: typeof oldQuarterId === "string" ? quarterMap.get(oldQuarterId) : undefined,
+        new: typeof newQuarterId === "string" ? quarterMap.get(newQuarterId) : undefined
+      }
+    };
     return {
       ...log,
+      displayValue,
       auditApplication: application ? {
         applicationNo: application.applicationNo,
         personnel: application.personnel.fullName,
