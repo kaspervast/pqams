@@ -27,7 +27,11 @@ function useApi<T = AnyRow[]>(key: string, path: string, enabled = true, refetch
     queryKey: [key, path, user?.id, user?.role],
     queryFn: () => api.get(path).then((response) => response.data.data),
     enabled,
-    refetchInterval
+    refetchInterval,
+    refetchIntervalInBackground: Boolean(refetchInterval),
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+    staleTime: refetchInterval ? 0 : undefined
   });
 }
 function ErrorText({ error }: { error: unknown }) {
