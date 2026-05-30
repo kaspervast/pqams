@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, setAccessToken } from "../api/client";
+import { api, getAccessToken, setAccessToken } from "../api/client";
 
 export type Role = "SUPER_ADMIN" | "ADMIN" | "CORRESPONDENCE_BRANCH" | "UNIT_USER" | "VIEWER";
 export type AuthUser = {
@@ -27,10 +27,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.post("/auth/refresh").then(({ data }) => {
-      setAccessToken(data.data.accessToken);
-      setUser(data.data.user);
-    }).catch(() => setAccessToken(null)).finally(() => setLoading(false));
+    const existingToken = getAccessToken();
+    const load = existingToken
+      ? api.get("/auth/me").then(({ data }) => setUser(data.data))
+      : api.post("/auth/refresh").then(({ data }) => {
+          setAccessToken(data.data.accessToken);
+          setUser(data.data.user);
+        });
+    load.catch(() => {
+      setAccessToken(null);
+      setUser(null);
+    }).finally(() => setLoading(false));
   }, []);
 
   const value = useMemo<AuthValue>(() => ({

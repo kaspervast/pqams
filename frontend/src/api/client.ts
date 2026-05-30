@@ -1,12 +1,17 @@
 import axios from "axios";
 
 export const api = axios.create({ baseURL: "/api", withCredentials: true });
-let accessToken: string | null = localStorage.getItem("pqams_token");
+let accessToken: string | null = sessionStorage.getItem("pqams_token");
+
+export function getAccessToken() {
+  return accessToken;
+}
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
-  if (token) localStorage.setItem("pqams_token", token);
-  else localStorage.removeItem("pqams_token");
+  localStorage.removeItem("pqams_token");
+  if (token) sessionStorage.setItem("pqams_token", token);
+  else sessionStorage.removeItem("pqams_token");
 }
 
 api.interceptors.request.use((request) => {
@@ -19,24 +24,9 @@ api.interceptors.request.use((request) => {
   return request;
 });
 
-let refreshing: Promise<string | null> | null = null;
 api.interceptors.response.use(undefined, async (error) => {
-  const original = error.config;
-  if (error.response?.status !== 401 || original?._retried || original?.url?.includes("/auth/")) throw error;
-  original._retried = true;
-  refreshing ??= api.post("/auth/refresh").then(({ data }) => {
-    setAccessToken(data.data.accessToken);
-    return data.data.accessToken as string;
-  }).catch(() => {
-    setAccessToken(null);
-    return null;
-  }).finally(() => {
-    refreshing = null;
-  });
-  const token = await refreshing;
-  if (!token) throw error;
-  original.headers.Authorization = `Bearer ${token}`;
-  return api(original);
+  if (error.response?.status === 401 && !error.config?.url?.includes("/auth/")) setAccessToken(null);
+  throw error;
 });
 
 export async function downloadFile(url: string, filename: string) {
