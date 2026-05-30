@@ -65,21 +65,43 @@ async function main() {
   const headquarters = await prisma.policeUnit.findUniqueOrThrow({ where: { name: rajkotPoliceUnits[26] } });
 
   const designationSeeds = [
+    ["CLASS4", "Class-4", 0],
     ["LR", "Lok Rakshak", 1],
     ["PC", "Police Constable", 2],
     ["HC", "Head Constable", 3],
     ["ASI", "Assistant Sub Inspector", 4],
     ["PSI", "Police Sub Inspector", 5],
     ["PI", "Police Inspector", 6],
-    ["ACP", "Assistant Commissioner of Police", 7]
+    ["ACP", "Assistant Commissioner of Police", 7],
+    ["DCP", "Deputy Commissioner of Police", 8]
   ] as const;
   for (const [code, name, rankOrder] of designationSeeds) {
     await prisma.designation.upsert({ where: { code }, update: { name, rankOrder }, create: { code, name, rankOrder } });
   }
 
-  const quarterTypeNames = ["1 BHK", "2 BHK", "3 BHK"];
-  for (const name of quarterTypeNames) {
-    await prisma.quarterType.upsert({ where: { name }, update: {}, create: { name } });
+  const officialQuarterTypes = [
+    { name: "A", legacyName: "1 BHK", displayOrder: 1, payScaleRange: "14800-17999", standardAreaSqM: 41.74, sanctionedTotal: 24, sanctionedOccupied: 10, sanctionedVacant: 14, sanctionedDamagedUnlivable: 0 },
+    { name: "B", legacyName: "2 BHK", displayOrder: 2, payScaleRange: "18000-29199", standardAreaSqM: 79.43, sanctionedTotal: 1448, sanctionedOccupied: 1448, sanctionedVacant: 0, sanctionedDamagedUnlivable: 0 },
+    { name: "C", legacyName: "3 BHK", displayOrder: 3, payScaleRange: "29200-53099", standardAreaSqM: 93.89, sanctionedTotal: 186, sanctionedOccupied: 177, sanctionedVacant: 9, sanctionedDamagedUnlivable: 0 },
+    { name: "D", displayOrder: 4, payScaleRange: "53100-78799", standardAreaSqM: 114.12, sanctionedTotal: 2, sanctionedOccupied: 2, sanctionedVacant: 0, sanctionedDamagedUnlivable: 0 },
+    { name: "E", displayOrder: 5, payScaleRange: "78800-123099", standardAreaSqM: 171.16, sanctionedTotal: 4, sanctionedOccupied: 4, sanctionedVacant: 0, sanctionedDamagedUnlivable: 0 },
+    { name: "E1", displayOrder: 6, payScaleRange: "123100-144199", standardAreaSqM: 369, sanctionedTotal: 2, sanctionedOccupied: 2, sanctionedVacant: 0, sanctionedDamagedUnlivable: 0 }
+  ];
+  for (const type of officialQuarterTypes) {
+    const existing = await prisma.quarterType.findFirst({ where: { name: { in: [type.name, type.legacyName ?? type.name] } } });
+    const data = {
+      name: type.name,
+      displayOrder: type.displayOrder,
+      payScaleRange: type.payScaleRange,
+      standardAreaSqM: type.standardAreaSqM,
+      sanctionedTotal: type.sanctionedTotal,
+      sanctionedOccupied: type.sanctionedOccupied,
+      sanctionedVacant: type.sanctionedVacant,
+      sanctionedDamagedUnlivable: type.sanctionedDamagedUnlivable,
+      isActive: true
+    };
+    if (existing) await prisma.quarterType.update({ where: { id: existing.id }, data });
+    else await prisma.quarterType.create({ data });
   }
   for (const name of ["Police Headquarter", "Char Maliya", "Ramnath Para", "Mounted Police Line"]) {
     await prisma.area.upsert({ where: { name }, update: {}, create: { name } });
@@ -88,24 +110,27 @@ async function main() {
   const designations = await prisma.designation.findMany();
   const quarterTypes = await prisma.quarterType.findMany();
   const eligibleByRank: Record<string, string[]> = {
-    LR: ["1 BHK"],
-    PC: ["1 BHK"],
-    HC: ["1 BHK", "2 BHK"],
-    ASI: ["1 BHK", "2 BHK"],
-    PSI: ["1 BHK", "2 BHK", "3 BHK"],
-    PI: ["1 BHK", "2 BHK", "3 BHK"],
-    ACP: ["1 BHK", "2 BHK"]
+    CLASS4: ["A"],
+    LR: ["B"],
+    PC: ["B"],
+    HC: ["B"],
+    ASI: ["B"],
+    PSI: ["C"],
+    PI: ["C", "D"],
+    ACP: ["E"],
+    DCP: ["E", "E1"]
   };
   for (const designation of designations) {
     for (const quarterType of quarterTypes) {
+      const eligibleTypes = eligibleByRank[designation.code] ?? [];
       await prisma.eligibilityRule.upsert({
         where: { designationId_quarterTypeId: { designationId: designation.id, quarterTypeId: quarterType.id } },
-        update: { isEligible: eligibleByRank[designation.code].includes(quarterType.name) },
+        update: { isEligible: eligibleTypes.includes(quarterType.name) },
         create: {
           designationId: designation.id,
           quarterTypeId: quarterType.id,
-          isEligible: eligibleByRank[designation.code].includes(quarterType.name),
-          remarks: designation.code === "ACP" && quarterType.name === "3 BHK" ? "Configurable departmental policy" : null
+          isEligible: eligibleTypes.includes(quarterType.name),
+          remarks: null
         }
       });
     }

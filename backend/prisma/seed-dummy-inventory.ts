@@ -7,7 +7,7 @@ type EstatePlan = {
   name: string;
   code: string;
   areaName: string;
-  quarterType: "2 BHK" | "3 BHK";
+  quarterType: "B" | "C";
   blocks: string[];
   floors: number;
   housesPerFloor: number;
@@ -28,7 +28,7 @@ const plans: EstatePlan[] = [
     name: "C7-C9 Officer Quarters",
     code: "PHQ",
     areaName: "Police Headquarter",
-    quarterType: "3 BHK",
+    quarterType: "C",
     blocks: ["C7", "C8", "C9"],
     floors: 10,
     housesPerFloor: 4,
@@ -38,7 +38,7 @@ const plans: EstatePlan[] = [
     name: "Char Maliya",
     code: "CM",
     areaName: "Char Maliya",
-    quarterType: "2 BHK",
+    quarterType: "B",
     blocks: Array.from({ length: 16 }, (_, index) => `B${index + 1}`),
     floors: 4,
     housesPerFloor: 4,
@@ -48,7 +48,7 @@ const plans: EstatePlan[] = [
     name: "Maruti Nagar",
     code: "MN",
     areaName: "Police Headquarter",
-    quarterType: "2 BHK",
+    quarterType: "B",
     blocks: Array.from({ length: 20 }, (_, index) => `B${index + 1}`),
     floors: 4,
     housesPerFloor: 4,
@@ -58,7 +58,7 @@ const plans: EstatePlan[] = [
     name: "Ramnath Para",
     code: "RP",
     areaName: "Ramnath Para",
-    quarterType: "2 BHK",
+    quarterType: "B",
     blocks: Array.from({ length: 7 }, (_, index) => `B${index + 1}`),
     floors: 4,
     housesPerFloor: 4,
@@ -68,7 +68,7 @@ const plans: EstatePlan[] = [
     name: "Mounted Police Line Officer Quarters",
     code: "MPL",
     areaName: "Mounted Police Line",
-    quarterType: "3 BHK",
+    quarterType: "C",
     blocks: ["B1", "B2"],
     floors: 10,
     housesPerFloor: 4,
@@ -78,7 +78,7 @@ const plans: EstatePlan[] = [
     name: "Mounted Police Line General Quarters",
     code: "MPL",
     areaName: "Mounted Police Line",
-    quarterType: "2 BHK",
+    quarterType: "B",
     blocks: ["B3", "B4", "B5", "B6"],
     floors: 10,
     housesPerFloor: 4,
@@ -125,25 +125,25 @@ async function main() {
 
   const typeByName = new Map(quarterTypes.map((type) => [type.name, type]));
   const designationByCode = new Map(designations.map((designation) => [designation.code, designation]));
-  const threeBhk = requireRecord(typeByName.get("3 BHK"), "3 BHK quarter type");
-  const allowedThreeBhk = new Set(["PSI", "PI"]);
+  const officerType = requireRecord(typeByName.get("C"), "C quarter type");
+  const allowedOfficerType = new Set(["PSI", "PI"]);
 
   for (const designation of designations) {
     await prisma.eligibilityRule.upsert({
-      where: { designationId_quarterTypeId: { designationId: designation.id, quarterTypeId: threeBhk.id } },
+      where: { designationId_quarterTypeId: { designationId: designation.id, quarterTypeId: officerType.id } },
       update: {
-        isEligible: allowedThreeBhk.has(designation.code),
-        remarks: allowedThreeBhk.has(designation.code)
-          ? "Eligible for seeded officer-category 3 BHK inventory"
-          : "3 BHK officer-category inventory restricted to PSI and PI"
+        isEligible: allowedOfficerType.has(designation.code),
+        remarks: allowedOfficerType.has(designation.code)
+          ? "Eligible for seeded officer-category C inventory"
+          : "C officer-category inventory restricted to PSI and PI"
       },
       create: {
         designationId: designation.id,
-        quarterTypeId: threeBhk.id,
-        isEligible: allowedThreeBhk.has(designation.code),
-        remarks: allowedThreeBhk.has(designation.code)
-          ? "Eligible for seeded officer-category 3 BHK inventory"
-          : "3 BHK officer-category inventory restricted to PSI and PI"
+        quarterTypeId: officerType.id,
+        isEligible: allowedOfficerType.has(designation.code),
+        remarks: allowedOfficerType.has(designation.code)
+          ? "Eligible for seeded officer-category C inventory"
+          : "C officer-category inventory restricted to PSI and PI"
       }
     });
   }
@@ -160,8 +160,8 @@ async function main() {
     select: { fullQuarterCode: true }
   })).map((quarter) => quarter.fullQuarterCode).filter((code): code is string => Boolean(code)));
 
-  const twoBhkResidentRanks = ["HC", "ASI", "PSI", "PI", "ACP"];
-  const threeBhkResidentRanks = ["PSI", "PI"];
+  const generalResidentRanks = ["HC", "ASI", "PSI", "PI", "ACP"];
+  const officerTypeResidentRanks = ["PSI", "PI"];
   let created = 0;
   let occupiedCreated = 0;
   let residentSequence = await prisma.personnel.count({ where: { indexNumber: { startsWith: "DUMMY-" } } });
@@ -171,7 +171,7 @@ async function main() {
 
     const quarterType = requireRecord(typeByName.get(planned.plan.quarterType), planned.plan.quarterType);
     const area = requireRecord(areas.get(planned.plan.areaName), planned.plan.areaName);
-    const ranks = planned.plan.quarterType === "3 BHK" ? threeBhkResidentRanks : twoBhkResidentRanks;
+    const ranks = planned.plan.quarterType === "C" ? officerTypeResidentRanks : generalResidentRanks;
     const residentRank = ranks[residentSequence % ranks.length];
     const designation = requireRecord(designationByCode.get(residentRank), `${residentRank} designation`);
     const posting = units[residentSequence % units.length]!;

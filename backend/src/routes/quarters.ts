@@ -105,9 +105,9 @@ router.get("/quarters/import-template.xlsx", allow(UserRole.ADMIN, UserRole.CORR
   workbook.creator = "PQAMS";
   const sheet = workbook.addWorksheet("Quarter Import");
   sheet.addRow(headers);
-  sheet.addRow([area?.name ?? "Police Headquarter", quarterType?.name ?? "2 BHK", "SAMPLE-A-101", "A", "A1", "1", "AVAILABLE", "Good", "MTR-001", "WTR-001"]);
+  sheet.addRow([area?.name ?? "Police Headquarter", quarterType?.name ?? "B", "SAMPLE-A-101", "A", "A1", "1", "AVAILABLE", "Good", "MTR-001", "WTR-001"]);
   sheet.addRow([
-    area?.name ?? "Police Headquarter", quarterType?.name ?? "2 BHK", "SAMPLE-A-102", "A", "A1", "1", "OCCUPIED",
+    area?.name ?? "Police Headquarter", quarterType?.name ?? "B", "SAMPLE-A-102", "A", "A1", "1", "OCCUPIED",
     "Good", "MTR-002", "WTR-002", "SAMPLE-IDX-001", "SAMPLE-BKL-001", "Sample Resident", "9999999999",
     designation?.code ?? "PC", policeUnit?.name ?? "Police Headquarter", "2026-05-29"
   ]);

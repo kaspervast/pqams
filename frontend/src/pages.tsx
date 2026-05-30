@@ -309,21 +309,55 @@ export function MastersPage() {
   const [name, setName] = useState("");
   const [extra, setExtra] = useState("");
   const [unitForm, setUnitForm] = useState({ name: "", unitType: "POLICE_STATION", address: "", contactNumber: "" });
+  const emptyQuarterTypeForm = {
+    name: "",
+    displayOrder: "0",
+    payScaleRange: "",
+    standardAreaSqM: "",
+    sanctionedTotal: "0",
+    sanctionedOccupied: "0",
+    sanctionedVacant: "0",
+    sanctionedDamagedUnlivable: "0",
+    description: ""
+  };
+  const [quarterTypeForm, setQuarterTypeForm] = useState(emptyQuarterTypeForm);
   const [editing, setEditing] = useState<AnyRow | null>(null);
   const [requestError, setRequestError] = useState<unknown>();
   const save = async () => {
     try {
       const body = tab === "police-units" ? unitForm :
         tab === "designations" ? { code: extra, name, rankOrder: editing?.rankOrder ?? designations.length + 1 } :
+        tab === "quarter-types" ? {
+          ...quarterTypeForm,
+          displayOrder: Number(quarterTypeForm.displayOrder || 0),
+          standardAreaSqM: quarterTypeForm.standardAreaSqM ? Number(quarterTypeForm.standardAreaSqM) : null,
+          sanctionedTotal: Number(quarterTypeForm.sanctionedTotal || 0),
+          sanctionedOccupied: Number(quarterTypeForm.sanctionedOccupied || 0),
+          sanctionedVacant: Number(quarterTypeForm.sanctionedVacant || 0),
+          sanctionedDamagedUnlivable: Number(quarterTypeForm.sanctionedDamagedUnlivable || 0),
+          payScaleRange: quarterTypeForm.payScaleRange || null,
+          description: quarterTypeForm.description || null
+        } :
         { name };
       if (editing) await api.patch(`/${tab}/${editing.id}`, body);
       else await api.post(`/${tab}`, body);
-      setName(""); setExtra(""); setUnitForm({ name: "", unitType: "POLICE_STATION", address: "", contactNumber: "" }); setEditing(null); await client.invalidateQueries({ queryKey: [tab] });
+      setName(""); setExtra(""); setUnitForm({ name: "", unitType: "POLICE_STATION", address: "", contactNumber: "" }); setQuarterTypeForm(emptyQuarterTypeForm); setEditing(null); await client.invalidateQueries({ queryKey: [tab] });
     } catch (e) { setRequestError(e); }
   };
   const edit = (row: AnyRow) => {
     setEditing(row);
     if (tab === "police-units") setUnitForm({ name: row.name, unitType: row.unitType, address: row.address ?? "", contactNumber: row.contactNumber ?? "" });
+    else if (tab === "quarter-types") setQuarterTypeForm({
+      name: row.name ?? "",
+      displayOrder: String(row.displayOrder ?? 0),
+      payScaleRange: row.payScaleRange ?? "",
+      standardAreaSqM: row.standardAreaSqM ? String(row.standardAreaSqM) : "",
+      sanctionedTotal: String(row.sanctionedTotal ?? 0),
+      sanctionedOccupied: String(row.sanctionedOccupied ?? 0),
+      sanctionedVacant: String(row.sanctionedVacant ?? 0),
+      sanctionedDamagedUnlivable: String(row.sanctionedDamagedUnlivable ?? 0),
+      description: row.description ?? ""
+    });
     else { setName(row.name); setExtra(tab === "designations" ? row.code : ""); }
   };
   const remove = async (row: AnyRow) => {
@@ -332,7 +366,7 @@ export function MastersPage() {
     catch (e) { setRequestError(e); }
   };
   const cancelEdit = () => {
-    setEditing(null); setName(""); setExtra(""); setUnitForm({ name: "", unitType: "POLICE_STATION", address: "", contactNumber: "" });
+    setEditing(null); setName(""); setExtra(""); setUnitForm({ name: "", unitType: "POLICE_STATION", address: "", contactNumber: "" }); setQuarterTypeForm(emptyQuarterTypeForm);
   };
   const masterForm = (mode: "create" | "edit") => tab === "police-units" ? <Grid container spacing={2}>
     <Grid size={{ xs: 12, md: 4 }}><TextField fullWidth label="Unit / Police Station Name" value={unitForm.name} onChange={(e) => setUnitForm({ ...unitForm, name: e.target.value })} /></Grid>
@@ -343,6 +377,20 @@ export function MastersPage() {
     <Grid size={{ xs: 12, md: 2.5 }}><TextField fullWidth label="Contact Number" value={unitForm.contactNumber} onChange={(e) => setUnitForm({ ...unitForm, contactNumber: e.target.value })} /></Grid>
     <Grid size={{ xs: 12 }}><Stack direction="row" spacing={1}>
       <Button variant="contained" onClick={save} disabled={!unitForm.name.trim()}>{mode === "edit" ? "Update Unit" : "Create Unit"}</Button>
+      {mode === "edit" && <Button onClick={cancelEdit}>Cancel</Button>}
+    </Stack></Grid>
+  </Grid> : tab === "quarter-types" ? <Grid container spacing={2}>
+    <Grid size={{ xs: 12, md: 1.2 }}><TextField fullWidth label="Type" value={quarterTypeForm.name} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, name: e.target.value.toUpperCase() })} /></Grid>
+    <Grid size={{ xs: 12, md: 1.2 }}><TextField fullWidth type="number" label="Index" value={quarterTypeForm.displayOrder} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, displayOrder: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 2 }}><TextField fullWidth label="Eligibility Pay Scale" value={quarterTypeForm.payScaleRange} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, payScaleRange: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 1.5 }}><TextField fullWidth type="number" label="Quarter Area" value={quarterTypeForm.standardAreaSqM} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, standardAreaSqM: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 1.2 }}><TextField fullWidth type="number" label="Total" value={quarterTypeForm.sanctionedTotal} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, sanctionedTotal: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 1.2 }}><TextField fullWidth type="number" label="Occupied" value={quarterTypeForm.sanctionedOccupied} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, sanctionedOccupied: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 1.2 }}><TextField fullWidth type="number" label="Vacant" value={quarterTypeForm.sanctionedVacant} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, sanctionedVacant: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 1.7 }}><TextField fullWidth type="number" label="Damaged/Unlivable" value={quarterTypeForm.sanctionedDamagedUnlivable} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, sanctionedDamagedUnlivable: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12, md: 6 }}><TextField fullWidth label="Description" value={quarterTypeForm.description} onChange={(e) => setQuarterTypeForm({ ...quarterTypeForm, description: e.target.value })} /></Grid>
+    <Grid size={{ xs: 12 }}><Stack direction="row" spacing={1}>
+      <Button variant="contained" onClick={save} disabled={!quarterTypeForm.name.trim()}>{mode === "edit" ? "Update Type" : "Create Type"}</Button>
       {mode === "edit" && <Button onClick={cancelEdit}>Cancel</Button>}
     </Stack></Grid>
   </Grid> : <Stack direction="row" spacing={2} alignItems="center">
@@ -371,6 +419,22 @@ export function MastersPage() {
         <Typography fontWeight={650} mb={1}>Edit Police Unit / Station: {row.name}</Typography>
         {masterForm("edit")}
       </Box> : null} /> :
+      tab === "quarter-types" ?
+      <DataTable rows={data} columns={[
+        { key: "displayOrder", label: "Index" },
+        { key: "name", label: "Quarter Type" },
+        { key: "payScaleRange", label: "Eligibility Pay Scale", render: (r) => r.payScaleRange ?? "-" },
+        { key: "standardAreaSqM", label: "Quarter Area", render: (r) => r.standardAreaSqM ?? "-" },
+        { key: "sanctionedTotal", label: "Total" },
+        { key: "sanctionedOccupied", label: "Occupied" },
+        { key: "sanctionedVacant", label: "Vacant" },
+        { key: "sanctionedDamagedUnlivable", label: "Damaged/Unlivable" },
+        { key: "isActive", label: "Status", render: (r) => <Chip size="small" color={r.isActive ? "success" : "default"} label={r.isActive ? "Active" : "Inactive"} /> },
+        { key: "actions", label: "Actions", render: (r) => <RowActions onEdit={() => edit(r)} onDelete={r.isActive ? () => remove(r) : undefined} /> }
+      ]} renderBeforeRow={(row) => editing?.id === row.id ? <Box>
+        <Typography fontWeight={650} mb={1}>Edit quarter type: {row.name}</Typography>
+        {masterForm("edit")}
+      </Box> : null} /> :
       <DataTable rows={data} columns={[
         { key: "name", label: "Name" },
         { key: tab === "designations" ? "code" : "isActive", label: tab === "designations" ? "Code" : "Status", render: tab === "designations" ? undefined : (r) => <Chip size="small" color={r.isActive ? "success" : "default"} label={r.isActive ? "Active" : "Inactive"} /> },
@@ -381,14 +445,59 @@ export function MastersPage() {
       </Box> : null} />}
   </Page>;
 }
-function EligibilityTable({ rows }: { rows: AnyRow[]; types: AnyRow[]; designations: AnyRow[] }) {
+function EligibilityTable({ rows, types }: { rows: AnyRow[]; types: AnyRow[]; designations: AnyRow[] }) {
   const client = useQueryClient();
-  return <DataTable rows={rows} columns={[
-    { key: "designation", label: "Designation", render: (r) => r.designation.code },
-    { key: "quarterType", label: "Quarter Type", render: (r) => r.quarterType.name },
-    { key: "isEligible", label: "Eligible", render: (r) => <Switch checked={r.isEligible} onChange={async (_, checked) => { await api.patch(`/eligibility-rules/${r.id}`, { isEligible: checked }); client.invalidateQueries({ queryKey: ["eligibility-rules"] }); }} /> },
-    { key: "requiresSpecialApproval", label: "Special Approval", render: (r) => <Switch checked={r.requiresSpecialApproval} onChange={async (_, checked) => { await api.patch(`/eligibility-rules/${r.id}`, { requiresSpecialApproval: checked }); client.invalidateQueries({ queryKey: ["eligibility-rules"] }); }} /> }
-  ]} />;
+  const summary: AnyRow[] = types.map((type: AnyRow) => {
+    const typeRules = rows.filter((row) => row.quarterTypeId === type.id);
+    const eligible = typeRules
+      .filter((row) => row.isEligible)
+      .sort((a, b) => (a.designation.rankOrder ?? 0) - (b.designation.rankOrder ?? 0))
+      .map((row) => row.designation.code)
+      .join(",");
+    const actual = rows.find((row) => row.quarterTypeId === type.id)?.quarterType?.actualInventory;
+    return {
+      ...type,
+      eligible: eligible || "-",
+      total: type.sanctionedTotal || actual?.total || 0,
+      occupied: type.sanctionedOccupied || actual?.occupied || 0,
+      vacant: type.sanctionedVacant || actual?.vacant || 0,
+      damagedUnlivable: type.sanctionedDamagedUnlivable || actual?.damagedUnlivable || 0
+    };
+  });
+  const totalRow = {
+    id: "total",
+    displayOrder: "Total",
+    name: "",
+    eligible: "",
+    payScaleRange: "",
+    standardAreaSqM: "",
+    total: summary.reduce((sum: number, row: AnyRow) => sum + Number(row.total || 0), 0),
+    occupied: summary.reduce((sum: number, row: AnyRow) => sum + Number(row.occupied || 0), 0),
+    vacant: summary.reduce((sum: number, row: AnyRow) => sum + Number(row.vacant || 0), 0),
+    damagedUnlivable: summary.reduce((sum: number, row: AnyRow) => sum + Number(row.damagedUnlivable || 0), 0)
+  };
+  return <Stack spacing={2}>
+    <DataTable rows={[...summary, totalRow]} columns={[
+      { key: "displayOrder", label: "Index" },
+      { key: "name", label: "Quarter Type" },
+      { key: "eligible", label: "Eligible" },
+      { key: "payScaleRange", label: "Eligibility Pay Scale", render: (r) => r.payScaleRange || "-" },
+      { key: "standardAreaSqM", label: "Quarter Area", render: (r) => r.standardAreaSqM || "-" },
+      { key: "total", label: "Total" },
+      { key: "occupied", label: "Occupied" },
+      { key: "vacant", label: "Vacant" },
+      { key: "damagedUnlivable", label: "Damaged/Unlivable" }
+    ]} />
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography variant="subtitle1" fontWeight={650} mb={1}>Designation Eligibility Rules</Typography>
+      <DataTable rows={rows} columns={[
+        { key: "designation", label: "Designation", render: (r) => r.designation.code },
+        { key: "quarterType", label: "Quarter Type", render: (r) => r.quarterType.name },
+        { key: "isEligible", label: "Eligible", render: (r) => <Switch checked={r.isEligible} onChange={async (_, checked) => { await api.patch(`/eligibility-rules/${r.id}`, { isEligible: checked }); client.invalidateQueries({ queryKey: ["eligibility-rules"] }); }} /> },
+        { key: "requiresSpecialApproval", label: "Special Approval", render: (r) => <Switch checked={r.requiresSpecialApproval} onChange={async (_, checked) => { await api.patch(`/eligibility-rules/${r.id}`, { requiresSpecialApproval: checked }); client.invalidateQueries({ queryKey: ["eligibility-rules"] }); }} /> }
+      ]} />
+    </Paper>
+  </Stack>;
 }
 
 export function PersonnelPage() {

@@ -197,15 +197,22 @@ model Designation {
 }
 
 model QuarterType {
-  id               String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name             String                  @unique @db.VarChar(50)
-  description      String?
-  isActive         Boolean                 @default(true) @map("is_active")
-  createdAt        DateTime                @default(now()) @map("created_at")
-  updatedAt        DateTime                @updatedAt @map("updated_at")
-  eligibilityRules EligibilityRule[]
-  quarters         Quarter[]
-  preferences      ApplicationPreference[]
+  id                         String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                       String                  @unique @db.VarChar(50)
+  description                String?
+  displayOrder               Int                     @default(0) @map("display_order")
+  payScaleRange              String?                 @map("pay_scale_range") @db.VarChar(50)
+  standardAreaSqM            Decimal?                @map("standard_area_sqm") @db.Decimal(10, 2)
+  sanctionedTotal            Int                     @default(0) @map("sanctioned_total")
+  sanctionedOccupied         Int                     @default(0) @map("sanctioned_occupied")
+  sanctionedVacant           Int                     @default(0) @map("sanctioned_vacant")
+  sanctionedDamagedUnlivable Int                     @default(0) @map("sanctioned_damaged_unlivable")
+  isActive                   Boolean                 @default(true) @map("is_active")
+  createdAt                  DateTime                @default(now()) @map("created_at")
+  updatedAt                  DateTime                @updatedAt @map("updated_at")
+  eligibilityRules           EligibilityRule[]
+  quarters                   Quarter[]
+  preferences                ApplicationPreference[]
 
   @@map("quarter_types")
 }

@@ -26,7 +26,18 @@ const unitInput = z.object({
   contactNumber: z.string().optional()
 });
 const designationInput = z.object({ code: z.string().min(1).max(20), name: z.string().min(2), rankOrder: z.coerce.number().int(), isActive: z.boolean().optional() });
-const quarterTypeInput = z.object({ name: z.string().min(1), description: z.string().optional(), isActive: z.boolean().optional() });
+const quarterTypeInput = z.object({
+  name: z.string().min(1),
+  description: z.string().nullable().optional(),
+  displayOrder: z.coerce.number().int().min(0).optional(),
+  payScaleRange: z.string().nullable().optional(),
+  standardAreaSqM: z.coerce.number().nonnegative().nullable().optional(),
+  sanctionedTotal: z.coerce.number().int().min(0).optional(),
+  sanctionedOccupied: z.coerce.number().int().min(0).optional(),
+  sanctionedVacant: z.coerce.number().int().min(0).optional(),
+  sanctionedDamagedUnlivable: z.coerce.number().int().min(0).optional(),
+  isActive: z.boolean().optional()
+});
 const areaInput = z.object({ name: z.string().min(2), description: z.string().optional(), address: z.string().optional(), isActive: z.boolean().optional() });
 const eligibilityInput = z.object({
   designationId: z.string().uuid(),
@@ -112,7 +123,7 @@ router.delete("/designations/:id", allow(UserRole.ADMIN), asyncHandler(async (re
   return ok(res, value, "Designation deactivated");
 }));
 
-router.get("/quarter-types", asyncHandler(async (_req, res) => ok(res, await prisma.quarterType.findMany({ orderBy: { name: "asc" } }))));
+router.get("/quarter-types", asyncHandler(async (_req, res) => ok(res, await prisma.quarterType.findMany({ orderBy: [{ displayOrder: "asc" }, { name: "asc" }] }))));
 router.post("/quarter-types", allow(UserRole.ADMIN), asyncHandler(async (req, res) => {
   const value = await prisma.quarterType.create({ data: quarterTypeInput.parse(req.body) });
   await audit(req, { action: "QUARTER_TYPE_CREATE", entityType: "QUARTER_TYPE", entityId: value.id, newValue: value });
@@ -146,7 +157,31 @@ router.delete("/areas/:id", allow(UserRole.ADMIN), asyncHandler(async (req, res)
   return ok(res, value, "Area deactivated");
 }));
 
-router.get("/eligibility-rules", asyncHandler(async (_req, res) => ok(res, await prisma.eligibilityRule.findMany({ include: { designation: true, quarterType: true }, orderBy: { designation: { rankOrder: "asc" } } }))));
+router.get("/eligibility-rules", asyncHandler(async (_req, res) => {
+  const [rules, inventory] = await Promise.all([
+    prisma.eligibilityRule.findMany({
+      include: { designation: true, quarterType: true },
+      orderBy: [{ quarterType: { displayOrder: "asc" } }, { designation: { rankOrder: "asc" } }]
+    }),
+    prisma.quarter.groupBy({ by: ["quarterTypeId", "status"], _count: true, where: { isActive: true } })
+  ]);
+  const inventoryByType = new Map<string, { total: number; occupied: number; vacant: number; damagedUnlivable: number }>();
+  for (const row of inventory) {
+    const current = inventoryByType.get(row.quarterTypeId) ?? { total: 0, occupied: 0, vacant: 0, damagedUnlivable: 0 };
+    current.total += row._count;
+    if (row.status === "OCCUPIED") current.occupied += row._count;
+    if (row.status === "AVAILABLE") current.vacant += row._count;
+    if (["UNDER_REPAIR", "VACATED_PENDING_INSPECTION", "DISPUTED"].includes(row.status)) current.damagedUnlivable += row._count;
+    inventoryByType.set(row.quarterTypeId, current);
+  }
+  return ok(res, rules.map((rule) => ({
+    ...rule,
+    quarterType: {
+      ...rule.quarterType,
+      actualInventory: inventoryByType.get(rule.quarterTypeId) ?? { total: 0, occupied: 0, vacant: 0, damagedUnlivable: 0 }
+    }
+  })));
+}));
 router.get("/eligibility-rules/check", asyncHandler(async (req, res) => {
   const input = z.object({ designationId: z.string().uuid(), quarterTypeId: z.string().uuid() }).parse(req.query);
   const rule = await prisma.eligibilityRule.findUnique({ where: { designationId_quarterTypeId: input } });
