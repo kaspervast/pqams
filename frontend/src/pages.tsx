@@ -37,6 +37,40 @@ function useApi<T = AnyRow[]>(key: string, path: string, enabled = true, refetch
 function ErrorText({ error }: { error: unknown }) {
   return error ? <Alert severity="error">{errorMessage(error)}</Alert> : null;
 }
+function formatAuditValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? "" : "s"}`;
+  if (typeof value === "object") {
+    const objectValue = value as AnyRow;
+    return objectValue.name ?? objectValue.fullName ?? objectValue.username ?? objectValue.status ?? objectValue.id ?? "Updated";
+  }
+  return String(value);
+}
+function auditDetails(row: AnyRow) {
+  const oldValue = row.oldValue ?? {};
+  const newValue = row.newValue ?? {};
+  const details: string[] = [];
+  if (newValue.status) details.push(`Status -> ${newValue.status}`);
+  if (newValue.username || newValue.role) details.push([newValue.username, newValue.role].filter(Boolean).join(" / "));
+  if (newValue.name || newValue.code) details.push([newValue.name, newValue.code].filter(Boolean).join(" / "));
+  if (newValue.attachmentType || newValue.name) details.push([newValue.attachmentType, newValue.name].filter(Boolean).join(": "));
+  if (newValue.reportType || newValue.format) details.push(`Report ${newValue.reportType ?? ""} ${newValue.format ?? ""}`.trim());
+  const oldObject = oldValue && typeof oldValue === "object" && !Array.isArray(oldValue) ? oldValue as AnyRow : {};
+  const newObject = newValue && typeof newValue === "object" && !Array.isArray(newValue) ? newValue as AnyRow : {};
+  const changedFields = Object.keys(newObject)
+    .filter((key) => !["id", "createdAt", "updatedAt", "passwordHash"].includes(key))
+    .filter((key) => JSON.stringify(oldObject[key] ?? null) !== JSON.stringify(newObject[key] ?? null))
+    .slice(0, 4);
+  for (const key of changedFields) {
+    if (key === "status" || key === "username" || key === "role" || key === "name" || key === "code" || key === "attachmentType" || key === "reportType" || key === "format") continue;
+    details.push(`${key}: ${formatAuditValue(oldObject[key])} -> ${formatAuditValue(newObject[key])}`);
+  }
+  if (!details.length && row.entityId) details.push(`Record ${String(row.entityId).slice(0, 8)}...`);
+  if (!details.length) details.push("No extra details recorded");
+  return <Stack spacing={0.25}>{details.slice(0, 4).map((detail, index) => <Typography key={index} variant="body2">{detail}</Typography>)}</Stack>;
+}
 function Page({ title, actions, children }: { title: string; actions?: ReactNode; children: ReactNode }) {
   return <Stack spacing={2}>
     <Stack direction="row" justifyContent="space-between" alignItems="center">
@@ -816,6 +850,7 @@ export function AuditPage() {
     <DataTable rows={data} columns={[
       { key: "createdAt", label: "Timestamp", render: (r) => new Date(r.createdAt).toLocaleString() },
       { key: "action", label: "Action" }, { key: "entityType", label: "Entity" },
+      { key: "details", label: "Details", render: auditDetails },
       { key: "user", label: "User", render: (r) => r.user?.username ?? "System" }, { key: "ipAddress", label: "IP" }
     ]} />
   </Page>;
